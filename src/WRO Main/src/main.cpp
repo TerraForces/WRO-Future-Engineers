@@ -58,6 +58,7 @@ TwoWire i2c(0);
 TaskHandle_t ultrasonicThread;
 uint32_t ultrasonicDistance[6] = {}; // distance to object in front of ultrasonic sensor in mm
 HardwareSerial loggingSerial(0);
+bool bounce = false;
 
 #pragma endregion global_properties
 
@@ -81,6 +82,8 @@ void setup() {
     loggingSerial.println("WRO Servo");
     loggingSerial.println(String("Version ") + WRO_SERVO_VERSION);
     loggingSerial.println();
+    pinMode(2, OUTPUT);
+    digitalWrite(2, HIGH);
 
     // start I2C as master in fast mode
     i2c.begin(Pin_I2C_SDA, Pin_I2C_SCL, 400000);
@@ -105,19 +108,26 @@ void setup() {
         pinMode(Pins_UltraSonic_Echo[i], INPUT);
     }
 
-    // create thread for requesting ultrasonic sensors on other core
-    uint8_t currentCore = xPortGetCoreID();
-    xTaskCreatePinnedToCore(ultrasonicThreadFunction, "Ultrasonic Thread", 10000, NULL, 0, &ultrasonicThread, 1 - currentCore);
+    xTaskCreatePinnedToCore(ultrasonicThreadFunction, "Ultrasonic Thread", 10000, NULL, 0, &ultrasonicThread, 1 - xPortGetCoreID());
+    delay(1000);
 }
 
 void loop() {
-    i2c.requestFrom(0x50, 12);
+    digitalWrite(2, bounce);
+    bounce = !bounce;
+    /*i2c.requestFrom(0x50, 12);
     uint16_t buffer[6];
     i2c.readBytes((char*)buffer, 12);
     updateRGB(buffer[0]);
     for(uint8_t i = 0; i < 6; i++){
         loggingSerial.println(buffer[i]);
-    }
+    }*/
+    // test
+    i2c.beginTransmission(0x50);
+    i2c.write((uint8_t)0b11111);
+    i2c.write((uint8_t)0b111111);
+    uint8_t error = i2c.endTransmission();
+    loggingSerial.println(error);
     delay(1000);
 }
 

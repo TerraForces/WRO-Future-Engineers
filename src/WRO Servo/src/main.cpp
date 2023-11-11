@@ -125,12 +125,12 @@ void setup() {
 
     // EN: start servo class with memory for 4 servos
     // DE: Starten der Servoklasse mit Speicher für 4 Servomotoren
-    //servo.init(4);
+    servo.init(4);
 
     // EN: output 0° signal to all servo pins
     // DE: Ausgabe des 0°-Signales an allen Servomotoranschlüssen
     for(uint8_t i = 0; i < 4; i++) {
-        //servo.set(Pins_PWM[i], 0);
+        servo.set(Pins_PWM[i], 0);
     }
 
     // EN: set pin modes of ADCs
