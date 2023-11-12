@@ -1,7 +1,5 @@
 #include "servo.h"
 
-// EN: index of next servo pulse to be completed
-// DE: Index des nächsten abzuschließenden Servoimpulses
 ::uint8_t nextServo = 0;
 
 ISR(TIMER1_COMPA_vect){
