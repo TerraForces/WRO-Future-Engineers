@@ -34,8 +34,8 @@ bool CAMERA::init() {
         .ledc_timer = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
         .pixel_format = PIXFORMAT_RGB565,
-        .frame_size = FRAMESIZE_QVGA,
-        .jpeg_quality = 4,
+        .frame_size = FRAMESIZE_VGA,
+        .jpeg_quality = 0,
         .fb_count = 1,
         .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
     };

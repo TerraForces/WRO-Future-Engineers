@@ -21,7 +21,9 @@
 			"string_view": "cpp",
 			"initializer_list": "cpp",
 			"*.tcc": "cpp",
-			"algorithm": "cpp"
+			"algorithm": "cpp",
+			"istream": "cpp",
+			"ostream": "cpp"
 		}
 	}
 }
