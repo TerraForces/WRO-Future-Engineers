@@ -3,7 +3,7 @@
 void mpuThreadFunction(void* parameter) {
     while(true) {
         uint64_t lastMicros = 0;
-        if(micros() - lastMicros >= 1000000 / mpu6050.sampleRate){
+        if(micros() - lastMicros >= 1000000 / mpu6050.sampleRate) {
             lastMicros = micros();
             for(uint8_t i = 0; i < 6; i++) {
                 if(mpu6050.updateData & (1 << i)) {
@@ -25,7 +25,7 @@ void MPU6050_Class::init(TwoWire* i2c, uint8_t address, uint8_t dataToUpdate, bo
     writeRegister(0x1c, 0x0);
     writeRegister(0x6b, 0x1);
     delay(40);
-    if(calibrationSamples > 0){
+    if(calibrationSamples > 0) {
         for(uint8_t i = 0; i < 6; i++) {
             if(updateData & (1 << i)) {
                 calibrate(i, calibrationSamples);

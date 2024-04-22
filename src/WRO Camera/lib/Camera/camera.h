@@ -1,6 +1,11 @@
 #ifndef CAMERA_H
 #define CAMERA_H
 
+/**
+ * MPU6050 library for ESP32 Camera
+ * by TerraForce
+*/
+
 #include <Arduino.h>
 #include <esp_camera.h>
 
@@ -22,27 +27,27 @@
 #define CAM_PIN_HREF 23
 #define CAM_PIN_PCLK 22
 
-struct RGB888 {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
+struct RGB565 {
+    uint16_t r : 5;
+    uint16_t g : 6;
+    uint16_t b : 5;
 };
 
 class CAMERA {
     private:
-        friend class RGB888ROW;
+        friend class RGB565ROW;
     public:
         // Friend Class
-        class RGB888ROW {
+        class RGB565ROW {
             public:
                 // Constructor
-                RGB888ROW(RGB888** rowStart, uint16_t x, uint16_t width);
+                RGB565ROW(RGB565** rowStart, uint16_t x, uint16_t width);
 
                 // Functions
-                RGB888 operator[](uint16_t y);
+                RGB565 operator[](uint16_t y);
 
             private:
-                RGB888** _rowStart = NULL;
+                RGB565** _rowStart = NULL;
                 uint16_t _x = 0;
                 uint16_t _width = 0;
         };
@@ -50,14 +55,14 @@ class CAMERA {
         // Functions
         bool init();
         bool capture();
-        RGB888ROW operator[](uint16_t x);
+        RGB565ROW operator[](uint16_t x);
 
         // Properties
         uint16_t height = 0;
         uint16_t width = 0;
 
     private:
-        RGB888* frame;
+        RGB565* frame;
         sensor_t* _sensor;
         camera_sensor_info_t* _settings;
 };

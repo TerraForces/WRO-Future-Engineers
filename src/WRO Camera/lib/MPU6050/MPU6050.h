@@ -3,7 +3,7 @@
 
 /**
  * MPU6050 library for ESP32 MCUs
- * by Robert Flugrat
+ * by TerraForce
 */
 
 #define MPU6050_VERSION "1.0.0"
@@ -22,7 +22,7 @@ enum MPU_DATA {
 
 class MPU6050_Class {
 public:
-    void init(::TwoWire* i2c, uint8_t address, uint8_t dataToUpdate, bool core, uint16_t samplesPerSecond = 250, uint16_t calibrationSamples = 1000);
+    void init(TwoWire* i2c, uint8_t address, uint8_t dataToUpdate, bool core, uint16_t samplesPerSecond = 250, uint16_t calibrationSamples = 1000);
     void update(uint8_t mpuData);
     void calibrate(uint8_t mpuData, uint8_t sampleCount);
 

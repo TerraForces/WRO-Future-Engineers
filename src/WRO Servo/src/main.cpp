@@ -1,6 +1,6 @@
 /**
  * WRO Servo
- * by Robert Flugrat
+ * by TerraForce
 */
 
 #define WRO_SERVO_VERSION "1.1.0"
@@ -9,7 +9,6 @@
 #pragma region includes
 
 #include <Arduino.h>
-#include <HardwareSerial.h>
 #include <Wire.h>
 #include <servo.h>
 
@@ -18,10 +17,10 @@
 
 #pragma region pin_definitions
 
-#define Pins_Interrupt              (uint8_t[]){2, 3}
-#define Pins_LEDs                   (uint8_t[]){11, 10, 9, 8, 7, 6, 5, 4}
-#define Pins_PWM                    (uint8_t[]){12, A1, A0, 13}
-#define Pins_ADC                    (uint8_t[]){A2, A3, A6, A7}
+#define Pins_Interrupt              (uint8_t[]){ 2, 3 }
+#define Pins_LEDs                   (uint8_t[]){ 11, 10, 9, 8, 7, 6, 5, 4 }
+#define Pins_PWM                    (uint8_t[]){ 12, A1, A0, 13 }
+#define Pins_ADC                    (uint8_t[]){ A2, A3, A6, A7 }
 
 #pragma endregion pin_definitions
 
@@ -32,6 +31,7 @@ struct SENSOR_DATA {
     uint16_t analogValues[4];
     uint32_t motorTurns[2];
 } sensorData = {};
+
 TwoWire i2c = Wire;
 SERVOS servo;
 bool i2cRequestWorking = false;
@@ -40,6 +40,7 @@ bool i2cRequestWorking = false;
 
 
 #pragma region functions
+
 void interruptFunction1();
 void interruptFunction2();
 void i2cOnRequestGuardFunction();
@@ -89,7 +90,7 @@ void interruptFunction2() {
 }
 
 void i2cOnRequestGuardFunction() {
-    if(!i2cRequestWorking){
+    if(!i2cRequestWorking) {
         i2cRequestWorking = true;
         i2cOnRequestFunction();
         i2cRequestWorking = false;
@@ -97,7 +98,7 @@ void i2cOnRequestGuardFunction() {
 }
 
 void i2cOnRequestFunction() {
-    for(uint8_t i = 0; i < 4; i++){
+    for(uint8_t i = 0; i < 4; i++) {
         sensorData.analogValues[i] = analogRead(Pins_ADC[i]);
     }
     i2c.write((uint8_t*)&sensorData, sizeof(SENSOR_DATA));

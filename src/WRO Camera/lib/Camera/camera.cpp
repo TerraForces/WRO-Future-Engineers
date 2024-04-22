@@ -1,17 +1,17 @@
 #include "camera.h"
 
-CAMERA::RGB888ROW::RGB888ROW(RGB888** rowStart, uint16_t x, uint16_t width) {
+CAMERA::RGB565ROW::RGB565ROW(RGB565** rowStart, uint16_t x, uint16_t width) {
     _rowStart = rowStart;
     _x = x;
     _width = width;
 }
 
-RGB888 CAMERA::RGB888ROW::operator[](uint16_t y) {
+RGB565 CAMERA::RGB565ROW::operator[](uint16_t y) {
     return (*_rowStart)[_x + (y * _width)];
 }
 
 bool CAMERA::init() {
-    frame = (RGB888*)ps_calloc(320 * 240, sizeof(RGB888));
+    frame = (RGB565*)ps_calloc(320 * 240, sizeof(RGB565));
     camera_config_t camera_config = {
         .pin_pwdn = CAM_PIN_PWDN,
         .pin_reset = CAM_PIN_RESET,
@@ -52,15 +52,13 @@ bool CAMERA::capture() {
     if(!frameBuffer) {
         return false;
     }
-    if(!fmt2rgb888(frameBuffer->buf, frameBuffer->len, frameBuffer->format, (uint8_t*)frame)) {
-        return false;
-    }
+    memcpy(frameBuffer->buf, frame, sizeof(frame));
     height = frameBuffer->height;
     width = frameBuffer->width;
     esp_camera_fb_return(frameBuffer);
     return true;
 }
 
-CAMERA::RGB888ROW CAMERA::operator[](uint16_t x) {
-    return CAMERA::RGB888ROW(&frame, x, width);
+CAMERA::RGB565ROW CAMERA::operator[](uint16_t x) {
+    return CAMERA::RGB565ROW(&frame, x, width);
 }

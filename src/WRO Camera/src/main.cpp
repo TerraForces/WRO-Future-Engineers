@@ -3,7 +3,7 @@
  * by TerraForce
 */
 
-#define WRO_CAMERA_VERSION "1.0.0"
+#define WRO_CAMERA_VERSION "1.1.0"
 
 // serial debug
 //#define SERIAL_DEBUG
@@ -30,21 +30,21 @@
 #pragma region pin_definitions
 
 // pins for I2C communication
-#define Pin_I2C_MASTER_SDA          (uint8_t)2
-#define Pin_I2C_MASTER_SCL          (uint8_t)14
-
-// data request interrupt pins
-#define Pin_Rotation_Request        (uint8_t)12
-#define Pin_Camera_Request          (uint8_t)13
+#define Pin_I2C_MASTER_SDA          (uint8_t) 14
+#define Pin_I2C_MASTER_SCL          (uint8_t) 13
 
 #pragma endregion pin_definitions
 
 
 #pragma region global_properties
 
+struct CAMERA_SENSOR_DATA {
+    int32_t rotation; // rotation in 1/10 degrees
+} cameraSensorData = {};
+
 CAMERA camera;
 TwoWire i2c_master(0);
-bool i2cRequestWorking = false;
+bool interruptWorking = false;
 
 #ifdef SERIAL_DEBUG
     HardwareSerial loggingSerial(0);
@@ -55,8 +55,7 @@ bool i2cRequestWorking = false;
 
 #pragma region functions
 
-void rotationRequestInterruptFunction();
-void cameraRequestInterruptFunction();
+void i2cSendData();
 
 #pragma endregion functions
 
@@ -81,22 +80,14 @@ void setup() {
     camera.init();
 
     // start MPU6050
-    mpu6050.init(&i2c_master, 0x69, (uint8_t)(1 << Rotation_Z), 1 - xPortGetCoreID());
-
-    // enable interrupts for data requests
-    pinMode(Pin_Rotation_Request, INPUT);
-    pinMode(Pin_Camera_Request, INPUT);
-    attachInterrupt(Pin_Rotation_Request, rotationRequestInterruptFunction, RISING);
-    attachInterrupt(Pin_Camera_Request, cameraRequestInterruptFunction, RISING);
+    mpu6050.init(&i2c_master, 0x68, (uint8_t)(1 << Rotation_Z), 1 - xPortGetCoreID());
 }
 
 void loop() {
 
     //camera.capture();
 
-    #ifdef DEBUG_ROTATION
-        loggingSerial.println(mpu6050.data[Rotation_Z], 2);
-    #endif
+    i2cSendData();
 
     #ifdef DEBUG_I2C_SCAN
         loggingSerial.println("Scanning for I2C devices ...");
@@ -110,16 +101,16 @@ void loop() {
         loggingSerial.println("done.\n");
     #endif
 
-    delay(500);
+    delay(10);
 }
 
-void rotationRequestInterruptFunction() {
-    int32_t rotation = (int32_t)(mpu6050.data[Rotation_Z] * 10);
+void i2cSendData() {
+    cameraSensorData.rotation = (int32_t)(mpu6050.data[Rotation_Z] * (-10.0));
     i2c_master.beginTransmission(0x51);
-    i2c_master.write((uint8_t*)&rotation, 4);
+    i2c_master.write((uint8_t*)&cameraSensorData, sizeof(CAMERA_SENSOR_DATA));
     i2c_master.endTransmission();
-}
-
-void cameraRequestInterruptFunction() {
-
+    
+    #ifdef DEBUG_ROTATION
+        loggingSerial.println(cameraSensorData.rotation / 10.0, 1);
+    #endif
 }
