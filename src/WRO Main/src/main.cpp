@@ -3,7 +3,7 @@
  * by TerraForce
 */
 
-#define WRO_MAIN_VERSION "1.2.0"
+#define WRO_MAIN_VERSION "1.2.1"
 
 // oled display debug
 //#define OLED_DISPLAY
@@ -19,6 +19,9 @@
 //#define DEBUG_LED_COMMANDS
 //#define DEBUG_I2C_SCAN
 //#define DEBUG_ROTATION
+
+// disable i2c features
+#define DISABLE_LIGHT_COMMANDS
 
 #define VOLTAGE_BATTERY_CHARGED     7.2
 #define VOLTAGE_BATTERY_EMPTY       6.8
@@ -43,12 +46,15 @@
 
 // pin of the start button
 #define Pin_Start_Button            (uint8_t) 8
+#define Pin_Start_Button_LED        (uint8_t) 6
 
 // pins for I2C communication
 #define Pin_I2C_MASTER_SDA          (uint8_t) 18
 #define Pin_I2C_MASTER_SCL          (uint8_t) 17
 #define Pin_I2C_SLAVE_SDA           (uint8_t) 7
 #define Pin_I2C_SLAVE_SCL           (uint8_t) 15
+
+#define Pin_TOF_Shutdown            (uint8_t) 5
 
 enum UltraSonicPositions {
     US_LeftFront,
@@ -266,26 +272,26 @@ void driveControl() {
         if((driveState.state != Curve) && (driveState.state != CurveEnding)) {
             if(curveCount < 12) {
                 // detect curves
-                if((millis() > lastCurve + 2000) && (outsideBorder == Right) && (ultrasonicDistance[US_LeftFront] > 1000)) {
+                if((millis() > lastCurve + 2000) && (outsideBorder == Right) && (ultrasonicDistance[US_LeftFront] > 1100)) {
                     driveState.direction = Left;
                     driveState.state = Curve;
                     antiRotation = cameraSensorData.rotation - targetRotation;
                     targetRotation -= 900;
-                    setServo(0, 9);
+                    setServo(0, 11);
                     setServo(1, -15);
-                    setLight(0, 0);
+                    setLight(0, 1);
                     setLight(1, 0);
                     curveCount++;
                 }
-                if((millis() > lastCurve + 2000) && (outsideBorder == Left) && (ultrasonicDistance[US_RightFront] > 1000)) {
+                if((millis() > lastCurve + 2000) && (outsideBorder == Left) && (ultrasonicDistance[US_RightFront] > 1100)) {
                     driveState.direction = Right;
                     driveState.state = Curve;
                     antiRotation = cameraSensorData.rotation - targetRotation;
                     targetRotation += 900;
-                    setServo(0, 9);
+                    setServo(0, 11);
                     setServo(1, 15);
                     setLight(0, 0);
-                    setLight(1, 0);
+                    setLight(1, 1);
                     curveCount++;
                 }
                 if(curveCount == 12) {
@@ -296,6 +302,7 @@ void driveControl() {
                 // find end position
                 if((ultrasonicDistance[US_CenterFront] != 0) && (ultrasonicDistance[US_CenterFront] < startPosDistance + 50)) {
                     setServo(0, 0);
+                    
                 }
             }
         }
@@ -304,6 +311,8 @@ void driveControl() {
         if((driveState.state == Curve) && (((driveState.direction == Left) && (rotation <= targetRotation - 30)) || ((driveState.direction == Right) && (rotation >= targetRotation + 30)))) {
             setServo(0, 7);
             setServo(1, 0);
+            setLight(0, 0);
+            setLight(1, 0);
             driveState.state = CurveEnding;
         }
 
@@ -318,28 +327,32 @@ void driveControl() {
     if((driveState.state != Curve) && (driveState.state != CurveEnding)) {
 
         // direction correction (ultrasonic)
-        if((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > 20) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] < -20)) {
+        if((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > 40) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] < -40)) {
             driveState.direction = Left;
             driveState.state = UltrasonicCorrection;
             setServo(1, -3);
             setLight(0, 1);
+            setLight(1, 0);
         }
-        else if((driveState.state == UltrasonicCorrection) && (driveState.direction == Left) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < 10) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] > -10)) {
+        else if((driveState.state == UltrasonicCorrection) && (driveState.direction == Left) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < 20) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] > -20)) {
             driveState.direction = Unknown;
             driveState.state = Unknown;
             setServo(1, 0);
             setLight(0, 0);
+            setLight(1, 0);
         }
-        else if((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < -20) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] > 20)) {
+        else if((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < -40) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] > 40)) {
             driveState.direction = Right;
             driveState.state = UltrasonicCorrection;
             setServo(1, 3);
+            setLight(0, 0);
             setLight(1, 1);
         }
-        else if((driveState.state == UltrasonicCorrection) && (driveState.direction == Right) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > -10) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] < 10)) {
+        else if((driveState.state == UltrasonicCorrection) && (driveState.direction == Right) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > -20) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] < 20)) {
             driveState.direction = Unknown;
             driveState.state = Unknown;
             setServo(1, 0);
+            setLight(0, 0);
             setLight(1, 0);
         }
 
@@ -355,6 +368,7 @@ void driveControl() {
             driveState.direction = Right;
             driveState.state = BorderCorrection;
             setServo(1, 6);
+            setLight(0, 0);
             setLight(1, 1);
         }
         else if((ultrasonicDistance[US_RightFront] < 120) && (ultrasonicDistance[US_RightFront] != 0)) {
@@ -362,6 +376,7 @@ void driveControl() {
             driveState.state = BorderCorrection;
             setServo(1, -6);
             setLight(0, 1);
+            setLight(1, 0);
         }
     }
 }
@@ -382,7 +397,7 @@ void ultrasonicThreadFunction(void* parameter) {
 
         for(uint8_t i = 0; i < 6; i++) {
             fireUltrasonic((UltraSonic_Process[i] == Variable) ? ((outsideBorder == Left) ? US_RightFront : ((outsideBorder == Right) ? US_LeftFront : US_CenterFront)) : UltraSonic_Process[i]);
-            delay(35);
+            delay(30);
         }
 
         #ifdef DEBUG_ULTRASONIC
@@ -415,19 +430,21 @@ void setServo(uint8_t index, int8_t speed) {
 }
 
 void setLight(uint8_t index, bool state) {
-    if((lightState & (1 << index)) >> index != state) {
-        lightState ^= 1 << index;
-        i2c_master.beginTransmission(0x50);
-        i2c_master.write(0x80 | ((index & 0x3f) << 1) | state);
-        i2c_master.endTransmission();
+    #ifndef DISABLE_LIGHT_COMMANDS
+        if((lightState & (1 << index)) >> index != state) {
+            lightState ^= 1 << index;
+            i2c_master.beginTransmission(0x50);
+            i2c_master.write(0x80 | ((index & 0x3f) << 1) | state);
+            i2c_master.endTransmission();
 
-        #ifdef DEBUG_LED_COMMANDS
-            loggingSerial.print("LED ");
-            loggingSerial.print(index, 10);
-            loggingSerial.print(": ");
-            loggingSerial.println(state ? "ON" : "OFF");
-        #endif
-    }
+            #ifdef DEBUG_LED_COMMANDS
+                loggingSerial.print("LED ");
+                loggingSerial.print(index, 10);
+                loggingSerial.print(": ");
+                loggingSerial.println(state ? "ON" : "OFF");
+            #endif
+        }
+    #endif
 }
 
 void i2cOnReceiveFunction(int bytes) {

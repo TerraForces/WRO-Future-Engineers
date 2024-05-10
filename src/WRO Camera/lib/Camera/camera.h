@@ -2,12 +2,13 @@
 #define CAMERA_H
 
 /**
- * MPU6050 library for ESP32 Camera
+ * Camera library for ESP32 Camera
  * by TerraForce
 */
 
 #include <Arduino.h>
 #include <esp_camera.h>
+#include <FS.h>
 
 #define CAM_PIN_PWDN 32
 #define CAM_PIN_RESET -1 //software reset will be performed
@@ -27,44 +28,72 @@
 #define CAM_PIN_HREF 23
 #define CAM_PIN_PCLK 22
 
-struct RGB565 {
-    uint16_t r : 5;
-    uint16_t g : 6;
-    uint16_t b : 5;
+struct RGB {
+    uint16_t color;
+    uint8_t r() {return (color & 0xF800) >> 8;}
+    uint8_t g() {return (color & 0x07E0) >> 3;}
+    uint8_t b() {return (color & 0x001F) << 3;}
 };
+
+enum FrameSize {
+    FS_96X96,    // 96x96
+    FS_QQVGA,    // 160x120
+    FS_QCIF,     // 176x144
+    FS_HQVGA,    // 240x176
+    FS_240X240,  // 240x240
+    FS_QVGA,     // 320x240
+    FS_CIF,      // 400x296
+    FS_HVGA,     // 480x320
+    FS_VGA,      // 640x480
+    FS_SVGA,     // 800x600
+    FS_XGA,      // 1024x768
+    FS_HD,       // 1280x720
+    FS_SXGA,     // 1280x1024
+    FS_UXGA,     // 1600x1200
+};
+
+#define FramePixels (uint32_t[]){ 9216, 19200, 25344, 42240, 57600, 76800, 118400, \
+                    153600, 307200, 480000, 786432, 921600, 1310720, 1920000 }
 
 class CAMERA {
     private:
-        friend class RGB565ROW;
+        friend class RGBROW;
     public:
         // Friend Class
-        class RGB565ROW {
+        class RGBROW {
             public:
                 // Constructor
-                RGB565ROW(RGB565** rowStart, uint16_t x, uint16_t width);
+                RGBROW(uint8_t* rowStart, uint16_t x, uint16_t width);
 
                 // Functions
-                RGB565 operator[](uint16_t y);
+                RGB operator[](uint16_t y);
 
             private:
-                RGB565** _rowStart = NULL;
+                uint8_t* _rowStart = NULL;
                 uint16_t _x = 0;
                 uint16_t _width = 0;
         };
 
         // Functions
-        bool init();
+        bool init(FrameSize frameSize);
         bool capture();
-        RGB565ROW operator[](uint16_t x);
+        bool save(File* file);
+
+        void setBrightness(uint8_t level);  // -2 - 2
+        void setContrast(uint8_t level);    // -2 - 2
+        void setSaturation(uint8_t level);  // -2 - 2
+        void setSharpness(uint8_t level);   // -2 - 2
+
+        RGBROW operator[](uint16_t x);
 
         // Properties
         uint16_t height = 0;
         uint16_t width = 0;
 
     private:
-        RGB565* frame;
-        sensor_t* _sensor;
+        sensor_t* sensor;
         camera_sensor_info_t* _settings;
+        camera_fb_t* frameBuffer;
 };
 
 #endif

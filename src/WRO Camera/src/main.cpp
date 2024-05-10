@@ -12,16 +12,24 @@
 //#define DEBUG_I2C_SCAN
 //#define DEBUG_ROTATION
 
+//#define SAVE_IMAGE_SD_CARD
+#define IMAGE_OVER_WIFI
+
 
 #pragma region includes
 
 #include <Arduino.h>
-#include <Wire.h>
 #include "camera.h"
-#include "MPU6050.h"
 
 #ifdef SERIAL_DEBUG
     #include <HardwareSerial.h>
+#endif
+
+#ifdef SAVE_IMAGE_SD_CARD
+    #include <SD_MMC.h>
+#else
+    #include <Wire.h>
+    #include "MPU6050.h"
 #endif
 
 #pragma endregion includes
@@ -29,22 +37,28 @@
 
 #pragma region pin_definitions
 
-// pins for I2C communication
-#define Pin_I2C_MASTER_SDA          (uint8_t) 14
-#define Pin_I2C_MASTER_SCL          (uint8_t) 13
+#ifndef SAVE_IMAGE_SD_CARD
+    // pins for I2C communication
+    #define Pin_I2C_MASTER_SDA          (uint8_t) 14
+    #define Pin_I2C_MASTER_SCL          (uint8_t) 13
+#endif
 
 #pragma endregion pin_definitions
 
 
 #pragma region global_properties
 
-struct CAMERA_SENSOR_DATA {
-    int32_t rotation; // rotation in 1/10 degrees
-} cameraSensorData = {};
+#ifndef SAVE_IMAGE_SD_CARD
+    struct CAMERA_SENSOR_DATA {
+        int32_t rotation; // rotation in 1/10 degrees
+    } cameraSensorData = {};
+    TwoWire i2c_master(0);
+    bool interruptWorking = false;
+#else
+    uint32_t imageCount = 0;
+#endif
 
 CAMERA camera;
-TwoWire i2c_master(0);
-bool interruptWorking = false;
 
 #ifdef SERIAL_DEBUG
     HardwareSerial loggingSerial(0);
@@ -55,7 +69,9 @@ bool interruptWorking = false;
 
 #pragma region functions
 
-void i2cSendData();
+#ifndef SAVE_IMAGE_SD_CARD
+    void i2cSendData();
+#endif
 
 #pragma endregion functions
 
@@ -68,8 +84,10 @@ void setup() {
         loggingSerial.println(String("\nWRO Camera\nVersion: ") + WRO_CAMERA_VERSION + "\n");
     #endif
 
-    // start I2C as master in fast mode
-    i2c_master.begin(Pin_I2C_MASTER_SDA, Pin_I2C_MASTER_SCL, 400000);
+    #ifndef SAVE_IMAGE_SD_CARD
+        // start I2C as master in fast mode
+        i2c_master.begin(Pin_I2C_MASTER_SDA, Pin_I2C_MASTER_SCL, 400000);
+    #endif
 
     // disable onboard LED
     pinMode(4, OUTPUT);
@@ -77,40 +95,64 @@ void setup() {
 
     // start camera and PSRAM
     psramInit();
-    camera.init();
+    camera.init(FS_UXGA);
 
-    // start MPU6050
-    mpu6050.init(&i2c_master, 0x68, (uint8_t)(1 << Rotation_Z), 1 - xPortGetCoreID());
+    #ifdef SAVE_IMAGE_SD_CARD
+        //start SD
+        SD_MMC.begin();
+    #endif
+
+    #ifndef SAVE_IMAGE_SD_CARD
+        // start MPU6050
+        mpu6050.init(&i2c_master, 0x68, (uint8_t)(1 << Rotation_Z), 1 - xPortGetCoreID());
+    #endif
 }
 
 void loop() {
 
-    //camera.capture();
+    camera.capture();
 
-    i2cSendData();
-
-    #ifdef DEBUG_I2C_SCAN
-        loggingSerial.println("Scanning for I2C devices ...");
-        for(uint8_t i = 1; i < 0x7f; i++) {
-            i2c_master.beginTransmission(i);
-            if(i2c_master.endTransmission() == 0) {
-                loggingSerial.print("I2C device found on address ");
-                loggingSerial.println(i, HEX);
-            }
+    #ifdef SAVE_IMAGE_SD_CARD
+        if(!SD_MMC.exists("/esp-cam-images")) {
+            SD_MMC.mkdir("/esp-cam-images");
         }
-        loggingSerial.println("done.\n");
-    #endif
+        while(SD_MMC.exists("/esp-cam-images/" + String(imageCount) + ".bmp")) {
+            imageCount++;
+        }
+        File file = SD_MMC.open("/esp-cam-images/" + String(imageCount) + ".bmp", "w", true);
+        camera.save(&file);
+        digitalWrite(4, HIGH);
+        delay(500);
+        digitalWrite(4, LOW);
+        delay(10000);
+    #else
+        i2cSendData();
 
-    delay(10);
+        #ifdef DEBUG_I2C_SCAN
+            loggingSerial.println("Scanning for I2C devices ...");
+            for(uint8_t i = 1; i < 0x7f; i++) {
+                i2c_master.beginTransmission(i);
+                if(i2c_master.endTransmission() == 0) {
+                    loggingSerial.print("I2C device found on address ");
+                    loggingSerial.println(i, HEX);
+                }
+            }
+            loggingSerial.println("done.\n");
+        #endif
+
+        delay(10);
+    #endif
 }
 
-void i2cSendData() {
-    cameraSensorData.rotation = (int32_t)(mpu6050.data[Rotation_Z] * (-10.0));
-    i2c_master.beginTransmission(0x51);
-    i2c_master.write((uint8_t*)&cameraSensorData, sizeof(CAMERA_SENSOR_DATA));
-    i2c_master.endTransmission();
-    
-    #ifdef DEBUG_ROTATION
-        loggingSerial.println(cameraSensorData.rotation / 10.0, 1);
-    #endif
-}
+#ifndef SAVE_IMAGE_SD_CARD
+    void i2cSendData() {
+        cameraSensorData.rotation = (int32_t)(mpu6050.data[Rotation_Z] * (-10.0));
+        i2c_master.beginTransmission(0x51);
+        i2c_master.write((uint8_t*)&cameraSensorData, sizeof(CAMERA_SENSOR_DATA));
+        i2c_master.endTransmission();
+        
+        #ifdef DEBUG_ROTATION
+            loggingSerial.println(cameraSensorData.rotation / 10.0, 1);
+        #endif
+    }
+#endif

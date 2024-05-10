@@ -1,17 +1,34 @@
 #include "camera.h"
 
-CAMERA::RGB565ROW::RGB565ROW(RGB565** rowStart, uint16_t x, uint16_t width) {
+typedef struct {
+    uint32_t bfSize; // needs to be calculated
+    uint16_t bfReserved1;
+    uint16_t bfReserved2;
+    uint32_t bfOffBits; // needs to be calculated
+    uint32_t biSize;
+    int32_t biWidth;
+    int32_t biHeight;
+    uint16_t biPlanes;
+    uint16_t biBitCount;
+    uint32_t biCompression;
+    uint32_t biSizeImage;
+    int32_t biXPelsPerMeter;
+    int32_t biYPelsPerMeter;
+    uint32_t biClrUsed;
+    uint32_t biClrImportant;
+} BMP_HEADER;
+
+CAMERA::RGBROW::RGBROW(uint8_t* rowStart, uint16_t x, uint16_t width) {
     _rowStart = rowStart;
     _x = x;
     _width = width;
 }
 
-RGB565 CAMERA::RGB565ROW::operator[](uint16_t y) {
-    return (*_rowStart)[_x + (y * _width)];
+RGB CAMERA::RGBROW::operator[](uint16_t y) {
+    return ((RGB*)_rowStart)[_x + (y * _width)];
 }
 
-bool CAMERA::init() {
-    frame = (RGB565*)ps_calloc(320 * 240, sizeof(RGB565));
+bool CAMERA::init(FrameSize frameSize) {
     camera_config_t camera_config = {
         .pin_pwdn = CAM_PIN_PWDN,
         .pin_reset = CAM_PIN_RESET,
@@ -34,7 +51,7 @@ bool CAMERA::init() {
         .ledc_timer = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
         .pixel_format = PIXFORMAT_RGB565,
-        .frame_size = FRAMESIZE_VGA,
+        .frame_size = (framesize_t)(uint8_t)frameSize,
         .jpeg_quality = 0,
         .fb_count = 1,
         .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
@@ -42,23 +59,50 @@ bool CAMERA::init() {
     if(esp_camera_init(&camera_config) != ESP_OK) {
         return false;
     }
-    _sensor = esp_camera_sensor_get();
-    _settings = esp_camera_sensor_get_info(&_sensor->id);
+    sensor = esp_camera_sensor_get();
+    _settings = esp_camera_sensor_get_info(&sensor->id);
+    sensor->set_hmirror(sensor, true);
     return true;
 }
 
 bool CAMERA::capture() {
-    camera_fb_t* frameBuffer = esp_camera_fb_get();
+    esp_camera_fb_return(frameBuffer);
+    frameBuffer = esp_camera_fb_get();
     if(!frameBuffer) {
         return false;
     }
-    memcpy(frameBuffer->buf, frame, sizeof(frame));
     height = frameBuffer->height;
     width = frameBuffer->width;
-    esp_camera_fb_return(frameBuffer);
     return true;
 }
 
-CAMERA::RGB565ROW CAMERA::operator[](uint16_t x) {
-    return CAMERA::RGB565ROW(&frame, x, width);
+bool CAMERA::save(File* file) {
+    BMP_HEADER bmpHeader = {};
+    bmpHeader.bfSize = 54 + (3 * width * height);
+    bmpHeader.bfOffBits = 54;
+    bmpHeader.biSize = 40;
+    bmpHeader.biWidth = width;
+	bmpHeader.biHeight = height;
+    bmpHeader.biPlanes = 1;
+    bmpHeader.biBitCount = 24;
+    bmpHeader.biSizeImage = 3 * width * height;
+    uint16_t bfType = 0x4d42;
+    file->write((uint8_t*)(&bfType), sizeof(uint16_t));
+    file->write((uint8_t*)(&bmpHeader), sizeof(BMP_HEADER));
+    for(uint16_t lines = 0; lines < height; lines++) {
+        uint8_t colorBuffer[width * 3];
+        fmt2rgb888(frameBuffer->buf + (lines * width * 2), width * 2, PIXFORMAT_RGB565, colorBuffer);
+        file->write(colorBuffer, sizeof(colorBuffer));
+    }
+    file->close();
+    return true;
+}
+
+void CAMERA::setBrightness  (uint8_t level) {sensor->set_brightness (sensor, level);}
+void CAMERA::setContrast    (uint8_t level) {sensor->set_contrast   (sensor, level);}
+void CAMERA::setSaturation  (uint8_t level) {sensor->set_saturation (sensor, level);}
+void CAMERA::setSharpness   (uint8_t level) {sensor->set_sharpness  (sensor, level);}
+
+CAMERA::RGBROW CAMERA::operator[](uint16_t x) {
+    return CAMERA::RGBROW(frameBuffer->buf, x, width);
 }
