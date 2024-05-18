@@ -6,13 +6,14 @@
 #define WRO_CAMERA_VERSION "1.2.0"
 
 // serial debug
-#define SERIAL_DEBUG
+// #define SERIAL_DEBUG
 
 // serial debug features
-//#define DEBUG_I2C_SCAN
-//#define DEBUG_ROTATION
+// #define DEBUG_I2C_SCAN
+// #define DEBUG_ROTATION
 
-#define SAVE_IMAGE_SD_CARD
+// saves image (after correction) on sd card
+// #define SAVE_IMAGE_SD_CARD
 
 
 #pragma region includes
@@ -73,7 +74,7 @@ struct CAMERA_SENSOR_DATA {
     TwoWire i2c_master(0);
     bool interruptWorking = false;
 #else
-    uint32_t imageCount = 0;
+    uint32_t ImageCount = 0;
 #endif
 
 CAMERA camera;
@@ -87,7 +88,7 @@ CAMERA camera;
 
 #pragma region functions
 
-void imageAnalysis();
+void ImageAnalysis();
 
 #ifndef SAVE_IMAGE_SD_CARD
     void i2cSendData();
@@ -138,20 +139,9 @@ void setup() {
 void loop() {
 
     camera.capture();
-    imageAnalysis();
-    delay(2000);
+    ImageAnalysis();
 
-    #ifdef SAVE_IMAGE_SD_CARD
-        /*if(!SD_MMC.exists("/esp-cam-images")) {
-            SD_MMC.mkdir("/esp-cam-images");
-        }
-        while(SD_MMC.exists("/esp-cam-images/" + String(imageCount) + ".bmp")) {
-            imageCount++;
-        }
-        File file = SD_MMC.open("/esp-cam-images/" + String(imageCount) + ".bmp", "w", true);
-        camera.save(&file);
-        delay(2000);*/
-    #else
+    #ifndef SAVE_IMAGE_SD_CARD
         i2cSendData();
 
         #ifdef DEBUG_I2C_SCAN
@@ -165,8 +155,6 @@ void loop() {
             }
             loggingSerial.println("done.\n");
         #endif
-
-        delay(10);
     #endif
 }
 
@@ -180,81 +168,93 @@ void loop() {
 #define MIN2(a, b) ((a) < (b) ? (a) : (b))
 #define MIN3(a, b, c) (MIN2(MIN2(a, b), c))
 
-#define AVERAGE_BRIGHTNESS  150
+// image processing parameters
+#define Image_Upper_Height          0.4
+#define Image_Lower_Height          0.8
 
-#define BlackR 15
-#define BlackG 15
-#define BlackB 15
+// image correction parameters
+#define Image_Average_Brightness    150
+#define Image_Correction_Strength   0.5
 
-void imageAnalysis() {
+// image analysis parameters
+#define Image_Black_Value_R         40
+#define Image_Black_Value_G         90
+#define Image_Black_Value_B         40
+#define Image_Min_Red_Value         60
+#define Image_Min_Green_Value       50
+#define Image_Max_Green_Value       150
+#define Image_Red_Ratio             1.4
+#define Image_Green_Ratio           1.6
+
+void ImageAnalysis() {
 	uint32_t averageR = 0, averageG = 0, averageB = 0;
 	for (uint16_t x = 0; x < camera.width; x += 10) {
-		for (uint16_t y = camera.height * 0.4; y < camera.height * 0.85; y += 10) {
+		for (uint16_t y = camera.height * Image_Upper_Height; y < camera.height * Image_Lower_Height; y += 10) {
 			averageR += camera[x][y].r();
 			averageG += camera[x][y].g();
 			averageB += camera[x][y].b();
 		}
 	}
-	averageR = (uint32_t)(averageR / (camera.width * camera.height * 0.0045));
-	averageG = (uint32_t)(averageG / (camera.width * camera.height * 0.0045));
-	averageB = (uint32_t)(averageB / (camera.width * camera.height * 0.0045));
-	int16_t correctionR = averageR - AVERAGE_BRIGHTNESS;
-	int16_t correctionG = averageG - AVERAGE_BRIGHTNESS;
-	int16_t correctionB = averageB - AVERAGE_BRIGHTNESS;
+    uint32_t pixelCount = (uint32_t)(camera.width * camera.height * 0.01 * (Image_Lower_Height - Image_Upper_Height));
+	averageR = (uint32_t)(averageR / (double)pixelCount);
+	averageG = (uint32_t)(averageG / (double)pixelCount);
+	averageB = (uint32_t)(averageB / (double)pixelCount);
+	int16_t correctionR = (int16_t)((averageR - Image_Average_Brightness) * Image_Correction_Strength);
+	int16_t correctionG = (int16_t)((averageG - Image_Average_Brightness) * Image_Correction_Strength);
+	int16_t correctionB = (int16_t)((averageB - Image_Average_Brightness) * Image_Correction_Strength);
 	for (uint16_t x = 0; x < camera.width; x += 10) {
-		for (uint16_t y = camera.height * 0.4; y < camera.height * 0.85; y += 10) {
-			camera[x][y].r() = MAX2(camera[x][y].r() - correctionR, 0);
-            camera[x][y].g() = MAX2(camera[x][y].g() - correctionG, 0);
-            camera[x][y].b() = MAX2(camera[x][y].b() - correctionB, 0);
+		for (uint16_t y = camera.height * Image_Upper_Height; y < camera.height * Image_Lower_Height; y += 10) {
+			camera[x][y].r() = MIN2(MAX2(camera[x][y].r() - correctionR, 0), 255);
+            camera[x][y].g() = MIN2(MAX2(camera[x][y].g() - correctionG, 0), 255);
+            camera[x][y].b() = MIN2(MAX2(camera[x][y].b() - correctionB, 0), 255);
 		}
 	}
 
-    if(!SD_MMC.exists("/esp-cam-images")) {
-        SD_MMC.mkdir("/esp-cam-images");
-    }
-    while(SD_MMC.exists("/esp-cam-images/" + String(imageCount) + ".bmp")) {
-        imageCount++;
-    }
-    File file = SD_MMC.open("/esp-cam-images/" + String(imageCount) + ".bmp", "w", true);
-
-    BMP_HEADER bmpHeader = {};
-    bmpHeader.bfSize = 54 + (uint32_t)(0.03 * camera.width * camera.height);
-    bmpHeader.bfOffBits = 54;
-    bmpHeader.biSize = 40;
-    bmpHeader.biWidth = camera.width / 10;
-	bmpHeader.biHeight = camera.height / 10;
-    bmpHeader.biPlanes = 1;
-    bmpHeader.biBitCount = 24;
-    bmpHeader.biSizeImage = (uint32_t)(0.03 * camera.width * camera.height);
-    uint16_t bfType = 0x4d42;
-    file.write((uint8_t*)(&bfType), sizeof(uint16_t));
-    file.write((uint8_t*)(&bmpHeader), sizeof(BMP_HEADER));
-    for(int16_t y = camera.height - 10; y >= 0; y -= 10) {
-        for(uint16_t x = 0; x < camera.width; x += 10) {
-            file.write(camera[x][y].b());
-            file.write(camera[x][y].g());
-            file.write(camera[x][y].r());
+    #ifdef SAVE_IMAGE_SD_CARD
+        if(!SD_MMC.exists("/esp-cam-images")) {
+            SD_MMC.mkdir("/esp-cam-images");
         }
-    }
-    file.close();
+        while(SD_MMC.exists("/esp-cam-images/" + String(ImageCount) + ".bmp")) {
+            ImageCount++;
+        }
+        File file = SD_MMC.open("/esp-cam-images/" + String(ImageCount) + ".bmp", "w", true);
+        BMP_HEADER bmpHeader = {};
+        bmpHeader.bfSize = 54 + (uint32_t)(pixelCount * 3);
+        bmpHeader.bfOffBits = 54;
+        bmpHeader.biSize = 40;
+        bmpHeader.biWidth = camera.width * 0.1;
+        bmpHeader.biHeight = camera.height * 0.1 * (Image_Lower_Height - Image_Upper_Height);
+        bmpHeader.biPlanes = 1;
+        bmpHeader.biBitCount = 24;
+        bmpHeader.biSizeImage = (uint32_t)(pixelCount * 3);
+        uint16_t bfType = 0x4d42;
+        file.write((uint8_t*)(&bfType), sizeof(uint16_t));
+        file.write((uint8_t*)(&bmpHeader), sizeof(BMP_HEADER));
+        for(int16_t y = (camera.height * Image_Lower_Height) - 10; y >= camera.height * Image_Upper_Height; y -= 10) {
+            for(uint16_t x = 0; x < camera.width; x += 10) {
+                file.write(camera[x][y].b());
+                file.write(camera[x][y].g());
+                file.write(camera[x][y].r());
+            }
+        }
+        file.close();
+    #endif
 
-    /*uint16_t PixelX = 0;
-    uint16_t PixelY = camera.height * 0.75;
+    uint16_t PixelX = 0;
+    uint16_t PixelY = camera.height * Image_Lower_Height;
 
     cameraSensorData.object.available = false;
     cameraSensorData.object.color = 0;
 	
-    loggingSerial.println("Image Analysis started ...");
-	while (((camera[camera.width / 2][PixelY].r() > BlackR) || (camera[camera.width / 2][PixelY].g() > BlackG) || (camera[camera.width / 2][PixelY].b() > BlackB) )&& (PixelY > 0)) {
+	while (((camera[camera.width / 2][PixelY].r() > Image_Black_Value_R) || (camera[camera.width / 2][PixelY].g() > Image_Black_Value_G) || (camera[camera.width / 2][PixelY].b() > Image_Black_Value_B)) && (PixelY >= camera.height * Image_Upper_Height)) {
 		PixelX = camera.width / 2;
-		while ((camera[PixelX][PixelY].r() > BlackR) && (camera[PixelX][PixelY].g() > BlackG) && (camera[PixelX][PixelY].b() > BlackB) && PixelX > 0) {
-			if ((camera[PixelX][PixelY].r() > camera[PixelX][PixelY].g() * 1.35) && (camera[PixelX][PixelY].r() > camera[PixelX][PixelY].b() * 1.35) && camera[PixelX][PixelY].r() > 20) {
+		while ((camera[PixelX][PixelY].r() > Image_Black_Value_R) && (camera[PixelX][PixelY].g() > Image_Black_Value_G) && (camera[PixelX][PixelY].b() > Image_Black_Value_B) && PixelX > 0) {
+			if ((camera[PixelX][PixelY].r() > camera[PixelX][PixelY].g() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > camera[PixelX][PixelY].b() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > Image_Min_Red_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Red;
-                loggingSerial.println("red");
 				goto ImageAnalysisEnd;
 			}
-			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() * 1.45) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * 1.45) && camera[PixelX][PixelY].g() > 20 && camera[PixelX][PixelY].g()<100) {
+			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() - 20) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 20) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Green;
 				goto ImageAnalysisEnd;
@@ -262,14 +262,13 @@ void imageAnalysis() {
 			PixelX -= 10;
 		}
 		PixelX = camera.width / 2;
-		while ((camera[PixelX][PixelY].r() > BlackR) && (camera[PixelX][PixelY].g() > BlackG) && (camera[PixelX][PixelY].b() > BlackB) && PixelX < camera.width) {
-			if ((camera[PixelX][PixelY].r() > camera[PixelX][PixelY].g() * 1.35) && (camera[PixelX][PixelY].r() > camera[PixelX][PixelY].b() * 1.35)&& camera[PixelX][PixelY].r()>20) {
+		while ((camera[PixelX][PixelY].r() > Image_Black_Value_R) && (camera[PixelX][PixelY].g() > Image_Black_Value_G) && (camera[PixelX][PixelY].b() > Image_Black_Value_B) && (PixelX < camera.width)) {
+			if ((camera[PixelX][PixelY].r() > camera[PixelX][PixelY].g() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > camera[PixelX][PixelY].b() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > Image_Min_Red_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Red;
-                loggingSerial.println("red");
 				goto ImageAnalysisEnd;
 			}
-			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() * 1.35) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * 1.25) && camera[PixelX][PixelY].g() > 40 && camera[PixelX][PixelY].g() < 100) {
+			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() - 20) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 20) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Green;
 				goto ImageAnalysisEnd;
@@ -279,42 +278,39 @@ void imageAnalysis() {
 		PixelY -= 10;
 	}
 	ImageAnalysisEnd:
-    cameraSensorData.object.direction = PixelX > camera.width;
-    loggingSerial.print("PixelX: ");
-    loggingSerial.println(PixelX, 10);
-    loggingSerial.print("PixelY: ");
-    loggingSerial.println(PixelY, 10);
+    cameraSensorData.object.direction = PixelX > camera.width / 2;
+    cameraSensorData.object.angle = (uint8_t)(((((camera.width / 2) - PixelX) > 0 ? ((camera.width / 2) - PixelX) : -((camera.width / 2) - PixelX)) / (camera.width / 2.0)) * 0x1F);
     
-    loggingSerial.print("R: ");
-    loggingSerial.println(camera[PixelX][PixelY].r(), 10);
-    loggingSerial.print("G: ");
-    loggingSerial.println(camera[PixelX][PixelY].g(), 10);
-    loggingSerial.print("B: ");
-    loggingSerial.println(camera[PixelX][PixelY].b(), 10);*/
+    #ifdef SERIAL_DEBUG
+        loggingSerial.print("Target pixel:\nx: ");
+        loggingSerial.println(PixelX);
+        loggingSerial.print("y: ");
+        loggingSerial.println(PixelY);
+        loggingSerial.print("r: ");
+        loggingSerial.println(camera[PixelX][PixelY].r());
+        loggingSerial.print("g: ");
+        loggingSerial.println(camera[PixelX][PixelY].g());
+        loggingSerial.print("b: ");
+        loggingSerial.println(camera[PixelX][PixelY].b());
 
-    /*for(uint16_t x = camera.width / 2; ; x += 10) {
-        for(uint16_t y = camera.height / 2; ; y += 10) {
-
-        }
-    }*/
-
-    if(cameraSensorData.object.available) {
-        if(cameraSensorData.object.color) {
-            loggingSerial.print("Found red object at");
+        if(cameraSensorData.object.available) {
+            if(cameraSensorData.object.color) {
+                loggingSerial.print("Found red object at");
+            }
+            else {
+                loggingSerial.print("Found green object at");
+            }
+            if(cameraSensorData.object.direction) {
+                loggingSerial.println(" right\n");
+            }
+            else {
+                loggingSerial.println(" left\n");
+            }
         }
         else {
-            loggingSerial.print("Found green object at");
+            loggingSerial.println("No object found\n");
         }
-        if(cameraSensorData.object.direction) {
-            loggingSerial.println(" right\n");
-        }
-        else {
-            loggingSerial.println(" left\n");
-        }
-    }
-    else {
-        loggingSerial.println("No object found\n");
-    }
+    #endif
 }
 
 #ifndef SAVE_IMAGE_SD_CARD

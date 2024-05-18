@@ -9,7 +9,7 @@
 #define DISABLE_LIGHT_COMMANDS
 
 #define VOLTAGE_BATTERY_CHARGED     8.5
-#define VOLTAGE_BATTERY_EMPTY       7.5
+#define VOLTAGE_BATTERY_EMPTY       7.0
 #pragma region includes
 
 #include <Arduino.h>
@@ -259,11 +259,12 @@ void loop() {
                 oled.print("Green");
             }
             if(cameraSensorData.object.direction) {
-                oled.print(" - Right");
+                oled.print(" - Right ");
             }
             else {
-                oled.print(" - Left");
+                oled.print(" - Left ");
             }
+            oled.print(cameraSensorData.object.angle);
         }
         else {
             oled.print("No object");

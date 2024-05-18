@@ -138,7 +138,7 @@ bool CAMERA::save(File* file) {
 }
 
 /*bool CAMERA::send(WiFiClient client) {
-    client.print("HTTP/1.1 200 OK\r\nContent-Type: image/bmp\r\n\r\n");
+    client.print("HTTP/1.1 200 OK\r\nContent-Type: Image/bmp\r\n\r\n");
     BMP_HEADER bmpHeader = {};
     bmpHeader.bfSize = 54 + (3 * width * height);
     bmpHeader.bfOffBits = 54;
