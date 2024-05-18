@@ -3,48 +3,26 @@
  * by TerraForce
 */
 
-#define WRO_MAIN_VERSION "1.2.1"
-
-// oled display debug
-//#define OLED_DISPLAY
-
-// serial debug
-//#define SERIAL_DEBUG
-
-// serial debug features#
-//#define DEBUG_BATTERY_VOLTAGE
-//#define DEBUG_MOTOR_TURNS
-//#define DEBUG_ULTRASONIC
-//#define DEBUG_SERVO_COMMANDS
-//#define DEBUG_LED_COMMANDS
-//#define DEBUG_I2C_SCAN
-//#define DEBUG_ROTATION
+#define WRO_MAIN_VERSION "1.3.0"
 
 // disable i2c features
 #define DISABLE_LIGHT_COMMANDS
 
-#define VOLTAGE_BATTERY_CHARGED     7.2
-#define VOLTAGE_BATTERY_EMPTY       6.8
-
+#define VOLTAGE_BATTERY_CHARGED     8.5
+#define VOLTAGE_BATTERY_EMPTY       7.5
 #pragma region includes
 
 #include <Arduino.h>
 #include <Wire.h>
-
-#ifdef OLED_DISPLAY
-    #include <Adafruit_SSD1306.h>
-#endif
-
-#ifdef SERIAL_DEBUG
-    #include <HardwareSerial.h>
-#endif
+#include <Adafruit_SSD1306.h>
+#include <HardwareSerial.h>
 
 #pragma endregion includes
 
 
 #pragma region pin_definitions
 
-// pin of the start button
+// pins of the start button
 #define Pin_Start_Button            (uint8_t) 8
 #define Pin_Start_Button_LED        (uint8_t) 6
 
@@ -54,7 +32,12 @@
 #define Pin_I2C_SLAVE_SDA           (uint8_t) 7
 #define Pin_I2C_SLAVE_SCL           (uint8_t) 15
 
+// TOF sensor shutdown pin
 #define Pin_TOF_Shutdown            (uint8_t) 5
+
+// program switch
+#define Pin_Obstacle_Switch         (uint8_t) 4
+#define Pin_Test_Mode_Switch        (uint8_t) 21
 
 enum UltraSonicPositions {
     US_LeftFront,
@@ -84,6 +67,14 @@ struct POWER_SENSOR_DATA {
 
 struct CAMERA_SENSOR_DATA {
     int32_t rotation; // rotation in 1/10 degrees
+
+    struct OBJECT_DATA {
+        uint8_t available   : 1;
+        uint8_t color       : 1;
+        uint8_t direction   : 1;
+        uint8_t angle       : 5;
+    } object;
+
 } cameraSensorData = {};
 
 TaskHandle_t ultrasonicThread;
@@ -96,13 +87,9 @@ uint8_t lightState = 0;
 TwoWire i2c_master(0);
 TwoWire i2c_slave(1);
 
-#ifdef OLED_DISPLAY
-    Adafruit_SSD1306 oled(128, 32, &i2c_master, -1, 400000, 400000);
-#endif
+Adafruit_SSD1306 oled(128, 32, &i2c_master, -1, 400000, 400000);
 
-#ifdef SERIAL_DEBUG
-    HardwareSerial loggingSerial(0);
-#endif
+HardwareSerial loggingSerial(0);
 
 enum Directions {
     Straight,
@@ -128,7 +115,7 @@ struct DRIVE_STATE {
 uint8_t outsideBorder = Unknown;
 int32_t rotation = 0, antiRotation = 0;
 int32_t targetRotation = 0; // rotation to curve target in 1/10°
-uint64_t lastCurve = 0;
+uint64_t lastCurve = 0, lastDisplayUpdate = 0;
 uint8_t curveCount = 0;
 uint16_t startPosDistance = 0;
 
@@ -144,118 +131,154 @@ void setServo(uint8_t index, int8_t speed);
 void setLight(uint8_t index, bool state);
 void i2cOnReceiveFunction(int bytes);
 void updateVoltageAndRPM();
+void testAlgorithm();
 
 #pragma endregion functions
 
 
+#pragma region setup
+
 void setup() {
     
-    #ifdef SERIAL_DEBUG
-        // start serial (UART)
-        loggingSerial.begin(115200, SERIAL_8N1, -1, -1, false, 20000, 112);
-        loggingSerial.println(String("\nWRO Main\nVersion: ") + WRO_MAIN_VERSION + "\n");
-    #endif
+    loggingSerial.setTxBufferSize(256);
+    loggingSerial.begin(115200, SERIAL_8N1, -1, -1, false, 20000, 112);
+    loggingSerial.println(String("\nWRO Main\nVersion: ") + WRO_MAIN_VERSION + "\n");
 
     // start I2C as master in fast mode
-    i2c_master.begin(Pin_I2C_MASTER_SDA, Pin_I2C_MASTER_SCL, 400000);
+    if(i2c_master.begin(Pin_I2C_MASTER_SDA, Pin_I2C_MASTER_SCL, 400000)) {
+        loggingSerial.println("SUCCESS - I2C master started");
+    }
+    else {
+        loggingSerial.println("FAILED - I2C master start failed");
+    }
 
-    #ifdef OLED_DISPLAY
-        // start and clear OLED
-        oled.begin(SSD1306_SWITCHCAPVCC, 0x3c, true, false);
-        oled.clearDisplay();
-        oled.display();
-    #endif
+    // start and clear OLED
+    if(oled.begin(SSD1306_SWITCHCAPVCC, 0x3c, true, false)) {
+        loggingSerial.println("SUCCESS - OLED started");
+    }
+    else {
+        loggingSerial.println("FAILED - OLED start failed");
+    }
+    oled.clearDisplay();
+    oled.display();
 
-    // set pin mode of start button
+    // set pin modes of start button
     pinMode(Pin_Start_Button, INPUT);
+    pinMode(Pin_Start_Button_LED, OUTPUT);
+    digitalWrite(Pin_Start_Button_LED, LOW);
 
     // set pin modes for ultrasonic sensors
     for(uint8_t i = 0; i < 6; i++) {
+        pinMode(Pins_UltraSonic_Echo[i], INPUT);
         pinMode(Pins_UltraSonic_Trig[i], OUTPUT);
         digitalWrite(Pins_UltraSonic_Trig[i], LOW);
-        pinMode(Pins_UltraSonic_Echo[i], INPUT);
     }
 
-    delay(2000);
+    // set pin modes for course mode switches
+    pinMode(Pin_Obstacle_Switch, INPUT);
+    pinMode(Pin_Test_Mode_Switch, INPUT);
+    loggingSerial.println("SUCCESS - pin modes set");
+
+    // wait for WRO Camera to get ready
+    delay(3000);
 
     // start I2C as slave in fast mode
-    i2c_slave.begin(0x51, Pin_I2C_SLAVE_SDA, Pin_I2C_SLAVE_SCL, 400000);
+    if(i2c_slave.begin(0x51, Pin_I2C_SLAVE_SDA, Pin_I2C_SLAVE_SCL, 400000)) {
+        loggingSerial.println("SUCCESS - I2C slave started");
+    }
+    else {
+        loggingSerial.println("FAILED - I2C slave start failed");
+    }
     i2c_slave.onReceive(i2cOnReceiveFunction);
-
-    // switch on all lights
-    setLight(0, 0);
-    setLight(1, 0);
     
     // start ultrasonic sensor thread
-    xTaskCreatePinnedToCore(ultrasonicThreadFunction, "Ultrasonic Thread", 10000, NULL, 0, &ultrasonicThread, 1 - xPortGetCoreID());
+    if(xTaskCreatePinnedToCore(ultrasonicThreadFunction, "Ultrasonic Thread", 10000, NULL, 0, &ultrasonicThread, 1 - xPortGetCoreID()) == pdPASS) {
+        loggingSerial.println("SUCCESS - Ultrasonic sensor thread created\n");
+    }
+    else {
+        loggingSerial.println("FAILED - Ultrasonic sensor thread creation failed\n");
+    }
 
-    #ifndef SERIAL_DEBUG
-        // wait for start signal
-        while(digitalRead(Pin_Start_Button)) {
-            delay(1);
-        }
-        setServo(0, 7);
+    if(digitalRead(Pin_Test_Mode_Switch) == HIGH) {
+        setLight(0, 1);
+        setLight(1, 1);
+        setLight(2, 1);
+    }
+
+    digitalWrite(Pin_Start_Button_LED, HIGH);
+    loggingSerial.print(digitalRead(Pin_Test_Mode_Switch) ? (digitalRead(Pin_Obstacle_Switch) ? "Obstacle course" : "Starter course") : "Test mode");
+    loggingSerial.println(" - Waiting for start signal ...");
+
+    // wait for start signal
+    while(digitalRead(Pin_Start_Button) == HIGH) {
+        delay(1);
+    }
+    loggingSerial.println("Start signal received");
+
+    if(digitalRead(Pin_Test_Mode_Switch) == HIGH) {
+        //setServo(0, 7);
         antiRotation = rotation;
         startPosDistance = ultrasonicDistance[US_CenterFront];
-    #endif
+    }
+    else {
+        loggingSerial.println("Test mode initialised\n");
+        testAlgorithm();
+    }
 }
+
+#pragma endregion setup
+
+
+#pragma region loop
 
 void loop() {
+    if(digitalRead(Pin_Test_Mode_Switch) == HIGH) {
+        //driveControl();
+    }
 
-    //updateVoltageAndRPM();
+    if(millis() > lastDisplayUpdate + 2000) {
 
-    #ifndef SERIAL_DEBUG
-        driveControl();
-    #endif
+        updateVoltageAndRPM();
 
-    #ifdef DEBUG_BATTERY_VOLTAGE
-        loggingSerial.print("Battery Voltage: ");
-        loggingSerial.print(powerSensorData.analogValues[0] * 0.009765625, 2);
-        loggingSerial.println(" V");
-    #endif
-
-    #ifdef DEBUG_MOTOR_TURNS
-        loggingSerial.print("Motor Turns: ");
-        loggingSerial.println(powerSensorData.motorTurns[0] / 8.0, 3);
-    #endif
-
-    #ifdef DEBUG_ROTATION
-        loggingSerial.print("Rotation: ");
-        loggingSerial.print(cameraSensorData.rotation / 10.0, 1);
-        loggingSerial.println("°");
-    #endif
-
-    #ifdef OLED_DISPLAY
+        float batteryVoltage = (powerSensorData.analogValues[0] * 0.012060546875);
+        float chargeLevel = (batteryVoltage - VOLTAGE_BATTERY_EMPTY) / (VOLTAGE_BATTERY_CHARGED - VOLTAGE_BATTERY_EMPTY);
         oled.clearDisplay();
-        oled.setCursor(50, 3);
+        oled.setCursor(2, 2);
         oled.setTextSize(1);
-        oled.setTextColor(0xffff);
-        oled.print(powerSensorData.analogValues[0] * 0.009765625, 2);
+        oled.setTextColor(1);
+        oled.print(batteryVoltage, 2);
         oled.print(" V");
-        oled.drawRect(100, 2, 26, 10, 0xffff);
-        float chargeLevel = ((powerSensorData.analogValues[0] * 0.009765625) - VOLTAGE_BATTERY_EMPTY) / (VOLTAGE_BATTERY_CHARGED - VOLTAGE_BATTERY_EMPTY);
-        oled.fillRect(100, 2, (uint16_t)(26 * chargeLevel), 10, 0xffff);
-        oled.display();
-    #endif
-
-    #ifdef DEBUG_I2C_SCAN
-        loggingSerial.println("Scanning for I2C devices ...");
-        for(uint8_t i = 1; i < 0x7f; i++) {
-            i2c_master.beginTransmission(i);
-            if(i2c_master.endTransmission() == 0) {
-                loggingSerial.print("I2C device found on address ");
-                loggingSerial.println(i, HEX);
+        oled.drawRect(80, 2, 40, 8, 1);
+        oled.fillRect(80, 2, (uint8_t)(40 * (chargeLevel > 0 ? (chargeLevel < 1 ? chargeLevel : 1) : 0)), 8, 1);
+        oled.setCursor(2, 16);
+        if(cameraSensorData.object.available) {
+            if(cameraSensorData.object.color) {
+                oled.print("Red");
+            }
+            else {
+                oled.print("Green");
+            }
+            if(cameraSensorData.object.direction) {
+                oled.print(" - Right");
+            }
+            else {
+                oled.print(" - Left");
             }
         }
-        loggingSerial.println("done.\n");
-    #endif
-    
-    #ifdef SERIAL_DEBUG
-        delay(100);
-    #else
-        delay(15);
-    #endif
+        else {
+            oled.print("No object");
+        }
+        oled.display();
+        lastDisplayUpdate = millis();
+    }
+
+    delay(20);
 }
+
+#pragma endregion loop
+
+
+#pragma region functions
 
 void driveControl() {
 
@@ -279,8 +302,6 @@ void driveControl() {
                     targetRotation -= 900;
                     setServo(0, 11);
                     setServo(1, -15);
-                    setLight(0, 1);
-                    setLight(1, 0);
                     curveCount++;
                 }
                 if((millis() > lastCurve + 2000) && (outsideBorder == Left) && (ultrasonicDistance[US_RightFront] > 1100)) {
@@ -290,8 +311,6 @@ void driveControl() {
                     targetRotation += 900;
                     setServo(0, 11);
                     setServo(1, 15);
-                    setLight(0, 0);
-                    setLight(1, 1);
                     curveCount++;
                 }
                 if(curveCount == 12) {
@@ -302,7 +321,6 @@ void driveControl() {
                 // find end position
                 if((ultrasonicDistance[US_CenterFront] != 0) && (ultrasonicDistance[US_CenterFront] < startPosDistance + 50)) {
                     setServo(0, 0);
-                    
                 }
             }
         }
@@ -311,8 +329,6 @@ void driveControl() {
         if((driveState.state == Curve) && (((driveState.direction == Left) && (rotation <= targetRotation - 30)) || ((driveState.direction == Right) && (rotation >= targetRotation + 30)))) {
             setServo(0, 7);
             setServo(1, 0);
-            setLight(0, 0);
-            setLight(1, 0);
             driveState.state = CurveEnding;
         }
 
@@ -331,29 +347,21 @@ void driveControl() {
             driveState.direction = Left;
             driveState.state = UltrasonicCorrection;
             setServo(1, -3);
-            setLight(0, 1);
-            setLight(1, 0);
         }
         else if((driveState.state == UltrasonicCorrection) && (driveState.direction == Left) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < 20) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] > -20)) {
             driveState.direction = Unknown;
             driveState.state = Unknown;
             setServo(1, 0);
-            setLight(0, 0);
-            setLight(1, 0);
         }
         else if((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < -40) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] > 40)) {
             driveState.direction = Right;
             driveState.state = UltrasonicCorrection;
             setServo(1, 3);
-            setLight(0, 0);
-            setLight(1, 1);
         }
         else if((driveState.state == UltrasonicCorrection) && (driveState.direction == Right) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > -20) && (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] < 20)) {
             driveState.direction = Unknown;
             driveState.state = Unknown;
             setServo(1, 0);
-            setLight(0, 0);
-            setLight(1, 0);
         }
 
         // near border correction (ultrasonic)
@@ -361,22 +369,16 @@ void driveControl() {
             driveState.direction = Unknown;
             driveState.state = Unknown;
             setServo(1, 0);
-            setLight(0, 0);
-            setLight(1, 0);
         }
         if((ultrasonicDistance[US_LeftFront] < 120) && (ultrasonicDistance[US_LeftFront] != 0)) {
             driveState.direction = Right;
             driveState.state = BorderCorrection;
             setServo(1, 6);
-            setLight(0, 0);
-            setLight(1, 1);
         }
         else if((ultrasonicDistance[US_RightFront] < 120) && (ultrasonicDistance[US_RightFront] != 0)) {
             driveState.direction = Left;
             driveState.state = BorderCorrection;
             setServo(1, -6);
-            setLight(0, 1);
-            setLight(1, 0);
         }
     }
 }
@@ -390,26 +392,10 @@ void fireUltrasonic(uint8_t num) {
 
 void ultrasonicThreadFunction(void* parameter) {
     while(true) {
-
-        #ifdef DEBUG_ULTRASONIC
-            int64_t startTime = esp_timer_get_time();
-        #endif
-
         for(uint8_t i = 0; i < 6; i++) {
             fireUltrasonic((UltraSonic_Process[i] == Variable) ? ((outsideBorder == Left) ? US_RightFront : ((outsideBorder == Right) ? US_LeftFront : US_CenterFront)) : UltraSonic_Process[i]);
             delay(30);
         }
-
-        #ifdef DEBUG_ULTRASONIC
-            loggingSerial.print("UltraSonic Rate: ");
-            loggingSerial.print(1000000.0 / (esp_timer_get_time() - startTime), 2);
-            loggingSerial.println(" hz");
-            for(uint8_t i = 0; i < 6; i++) {
-                loggingSerial.print(ultrasonicDistance[i]);
-                loggingSerial.println(" mm");
-            }
-            delay(1000);
-        #endif
     }
 }
 
@@ -420,31 +406,21 @@ void setServo(uint8_t index, int8_t speed) {
         i2c_master.write(((index & 0x3) << 5) | ((speed < 0) * 0x10) | (((speed < 0) ? (-speed) : speed)) & 0xf);
         i2c_master.endTransmission();
 
-        #ifdef DEBUG_SERVO_COMMANDS
-            loggingSerial.print("Servo ");
-            loggingSerial.print(index, 10);
-            loggingSerial.print(": ");
-            loggingSerial.println(speed, 10);
-        #endif
+        loggingSerial.print("Servo " + String(index, 10) + ": ");
+        loggingSerial.println(speed, 10);
     }
 }
 
 void setLight(uint8_t index, bool state) {
-    #ifndef DISABLE_LIGHT_COMMANDS
-        if((lightState & (1 << index)) >> index != state) {
-            lightState ^= 1 << index;
-            i2c_master.beginTransmission(0x50);
-            i2c_master.write(0x80 | ((index & 0x3f) << 1) | state);
-            i2c_master.endTransmission();
+    if((lightState & (1 << index)) >> index != state) {
+        lightState ^= 1 << index;
+        i2c_master.beginTransmission(0x50);
+        i2c_master.write(0x80 | ((index & 0x3f) << 1) | state);
+        i2c_master.endTransmission();
 
-            #ifdef DEBUG_LED_COMMANDS
-                loggingSerial.print("LED ");
-                loggingSerial.print(index, 10);
-                loggingSerial.print(": ");
-                loggingSerial.println(state ? "ON" : "OFF");
-            #endif
-        }
-    #endif
+        loggingSerial.print("LED " + String(index, 10) + ": ");
+        loggingSerial.println(state ? "ON" : "OFF");
+    }
 }
 
 void i2cOnReceiveFunction(int bytes) {
@@ -459,3 +435,44 @@ void updateVoltageAndRPM() {
     }
     i2c_master.readBytes((uint8_t*)&powerSensorData, sizeof(POWER_SENSOR_DATA));
 }
+
+void testAlgorithm() {
+
+    // print ultrasonic sensor data
+    for(uint8_t i = 0; i < 6; i++) {
+        loggingSerial.println("Ultrasonic sensor " + String((uint32_t)i) + ": " + String(ultrasonicDistance[i] / 10.0, 1) + " cm");
+    }
+
+    // test LED functionality
+    setLight(0, 1);
+    delay(2000);
+    setLight(0, 0);
+
+    setLight(1, 1);
+    delay(2000);
+    setLight(1, 0);
+
+    setLight(2, 1);
+    delay(2000);
+    setLight(2, 0);
+
+    // test servo functionality
+    for(uint8_t i = 0; i < 2; i++) {
+        for(uint8_t j = 0; j < 4; j++) {
+            for(int8_t k = 0; k < 16; k++) {
+                setServo(i, j & 2 ? 0 - ( j & 1 ? 15 - k : k) : ( j & 1 ? 15 - k : k));
+                delay(500);
+            }
+        }
+    }
+    
+    // print power pcb sensor data
+    updateVoltageAndRPM();
+    loggingSerial.println("\nBattery Voltage: " + String(powerSensorData.analogValues[0] * 0.012060546875, 2) + " V");
+    loggingSerial.println("Motor turns: " + String(powerSensorData.motorTurns[0] / 8.0, 3));
+
+    // print camera data
+    loggingSerial.println("Rotation: " + String(rotation / 10.0, 1) + "°");
+}
+
+#pragma endregion

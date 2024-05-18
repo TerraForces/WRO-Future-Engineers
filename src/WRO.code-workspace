@@ -23,7 +23,19 @@
 			"*.tcc": "cpp",
 			"algorithm": "cpp",
 			"istream": "cpp",
-			"ostream": "cpp"
+			"ostream": "cpp",
+			"streambuf": "cpp",
+			"atomic": "cpp",
+			"iterator": "cpp",
+			"memory_resource": "cpp",
+			"optional": "cpp",
+			"fstream": "cpp",
+			"sstream": "cpp",
+			"system_error": "cpp",
+			"functional": "cpp",
+			"tuple": "cpp",
+			"random": "cpp",
+			"limits": "cpp"
 		}
 	}
 }
