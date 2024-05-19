@@ -3,7 +3,7 @@
  * by TerraForce
 */
 
-#define WRO_CAMERA_VERSION "1.2.0"
+#define WRO_CAMERA_VERSION "1.3.0"
 
 // serial debug
 // #define SERIAL_DEBUG
@@ -139,6 +139,11 @@ void setup() {
 void loop() {
 
     camera.capture();
+
+    #ifndef SAVE_IMAGE_SD_CARD
+        i2cSendData();
+    #endif
+
     ImageAnalysis();
 
     #ifndef SAVE_IMAGE_SD_CARD
@@ -171,39 +176,43 @@ void loop() {
 // image processing parameters
 #define Image_Upper_Height          0.4
 #define Image_Lower_Height          0.8
+#define Image_Density_Horizontal    20
+#define Image_Density_Vertical      20
 
 // image correction parameters
-#define Image_Average_Brightness    150
-#define Image_Correction_Strength   0.5
+#define Image_Average_Brightness                150
+#define Image_Brightness_Correction_Strength    1.0
+#define Image_Color_Correction_Strength         0.5
 
 // image analysis parameters
 #define Image_Black_Value_R         40
-#define Image_Black_Value_G         90
+#define Image_Black_Value_G         40
 #define Image_Black_Value_B         40
 #define Image_Min_Red_Value         60
-#define Image_Min_Green_Value       50
-#define Image_Max_Green_Value       150
+#define Image_Min_Green_Value       40
+#define Image_Max_Green_Value       200
 #define Image_Red_Ratio             1.4
-#define Image_Green_Ratio           1.6
+#define Image_Green_Ratio           1.4
 
 void ImageAnalysis() {
 	uint32_t averageR = 0, averageG = 0, averageB = 0;
-	for (uint16_t x = 0; x < camera.width; x += 10) {
-		for (uint16_t y = camera.height * Image_Upper_Height; y < camera.height * Image_Lower_Height; y += 10) {
+	for (uint16_t x = 0; x < camera.width; x += Image_Density_Horizontal) {
+		for (uint16_t y = camera.height * Image_Upper_Height; y < camera.height * Image_Lower_Height; y += Image_Density_Vertical) {
 			averageR += camera[x][y].r();
 			averageG += camera[x][y].g();
 			averageB += camera[x][y].b();
 		}
 	}
-    uint32_t pixelCount = (uint32_t)(camera.width * camera.height * 0.01 * (Image_Lower_Height - Image_Upper_Height));
+    uint32_t pixelCount = (uint32_t)(camera.width * camera.height * (Image_Lower_Height - Image_Upper_Height) / (Image_Density_Horizontal * Image_Density_Vertical));
 	averageR = (uint32_t)(averageR / (double)pixelCount);
 	averageG = (uint32_t)(averageG / (double)pixelCount);
 	averageB = (uint32_t)(averageB / (double)pixelCount);
-	int16_t correctionR = (int16_t)((averageR - Image_Average_Brightness) * Image_Correction_Strength);
-	int16_t correctionG = (int16_t)((averageG - Image_Average_Brightness) * Image_Correction_Strength);
-	int16_t correctionB = (int16_t)((averageB - Image_Average_Brightness) * Image_Correction_Strength);
-	for (uint16_t x = 0; x < camera.width; x += 10) {
-		for (uint16_t y = camera.height * Image_Upper_Height; y < camera.height * Image_Lower_Height; y += 10) {
+    uint16_t averageMin = MIN3(averageR, averageG, averageB);
+	int16_t correctionR = (int16_t)(((averageR - averageMin) * Image_Color_Correction_Strength) + ((averageMin - Image_Average_Brightness) * Image_Brightness_Correction_Strength));
+	int16_t correctionG = (int16_t)(((averageG - averageMin) * Image_Color_Correction_Strength) + ((averageMin - Image_Average_Brightness) * Image_Brightness_Correction_Strength));
+    int16_t correctionB = (int16_t)(((averageB - averageMin) * Image_Color_Correction_Strength) + ((averageMin - Image_Average_Brightness) * Image_Brightness_Correction_Strength));
+	for (uint16_t x = 0; x < camera.width; x += Image_Density_Horizontal) {
+		for (uint16_t y = camera.height * Image_Upper_Height; y < camera.height * Image_Lower_Height; y += Image_Density_Vertical) {
 			camera[x][y].r() = MIN2(MAX2(camera[x][y].r() - correctionR, 0), 255);
             camera[x][y].g() = MIN2(MAX2(camera[x][y].g() - correctionG, 0), 255);
             camera[x][y].b() = MIN2(MAX2(camera[x][y].b() - correctionB, 0), 255);
@@ -222,16 +231,16 @@ void ImageAnalysis() {
         bmpHeader.bfSize = 54 + (uint32_t)(pixelCount * 3);
         bmpHeader.bfOffBits = 54;
         bmpHeader.biSize = 40;
-        bmpHeader.biWidth = camera.width * 0.1;
-        bmpHeader.biHeight = camera.height * 0.1 * (Image_Lower_Height - Image_Upper_Height);
+        bmpHeader.biWidth = camera.width / Image_Density_Horizontal;
+        bmpHeader.biHeight = camera.height * (Image_Lower_Height - Image_Upper_Height) / Image_Density_Vertical;
         bmpHeader.biPlanes = 1;
         bmpHeader.biBitCount = 24;
         bmpHeader.biSizeImage = (uint32_t)(pixelCount * 3);
         uint16_t bfType = 0x4d42;
         file.write((uint8_t*)(&bfType), sizeof(uint16_t));
         file.write((uint8_t*)(&bmpHeader), sizeof(BMP_HEADER));
-        for(int16_t y = (camera.height * Image_Lower_Height) - 10; y >= camera.height * Image_Upper_Height; y -= 10) {
-            for(uint16_t x = 0; x < camera.width; x += 10) {
+        for(int16_t y = (camera.height * Image_Lower_Height) - Image_Density_Vertical; y >= camera.height * Image_Upper_Height; y -= Image_Density_Vertical) {
+            for(uint16_t x = 0; x < camera.width; x += Image_Density_Horizontal) {
                 file.write(camera[x][y].b());
                 file.write(camera[x][y].g());
                 file.write(camera[x][y].r());
@@ -248,34 +257,34 @@ void ImageAnalysis() {
 	
 	while (((camera[camera.width / 2][PixelY].r() > Image_Black_Value_R) || (camera[camera.width / 2][PixelY].g() > Image_Black_Value_G) || (camera[camera.width / 2][PixelY].b() > Image_Black_Value_B)) && (PixelY >= camera.height * Image_Upper_Height)) {
 		PixelX = camera.width / 2;
-		while ((camera[PixelX][PixelY].r() > Image_Black_Value_R) && (camera[PixelX][PixelY].g() > Image_Black_Value_G) && (camera[PixelX][PixelY].b() > Image_Black_Value_B) && PixelX > 0) {
+		while ((camera[PixelX][PixelY].r() > Image_Black_Value_R) && (camera[PixelX][PixelY].g() > Image_Black_Value_G) && (camera[PixelX][PixelY].b() > Image_Black_Value_B) && PixelX > 200) {
 			if ((camera[PixelX][PixelY].r() > camera[PixelX][PixelY].g() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > camera[PixelX][PixelY].b() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > Image_Min_Red_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Red;
 				goto ImageAnalysisEnd;
 			}
-			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() - 20) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 20) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
+			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() + 30) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 120) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Green;
 				goto ImageAnalysisEnd;
 			}
-			PixelX -= 10;
+			PixelX -= Image_Density_Horizontal;
 		}
 		PixelX = camera.width / 2;
-		while ((camera[PixelX][PixelY].r() > Image_Black_Value_R) && (camera[PixelX][PixelY].g() > Image_Black_Value_G) && (camera[PixelX][PixelY].b() > Image_Black_Value_B) && (PixelX < camera.width)) {
+		while ((camera[PixelX][PixelY].r() > Image_Black_Value_R) && (camera[PixelX][PixelY].g() > Image_Black_Value_G) && (camera[PixelX][PixelY].b() > Image_Black_Value_B) && (PixelX < camera.width -200)) {
 			if ((camera[PixelX][PixelY].r() > camera[PixelX][PixelY].g() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > camera[PixelX][PixelY].b() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > Image_Min_Red_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Red;
 				goto ImageAnalysisEnd;
 			}
-			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() - 20) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 20) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
+			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() + 30) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 120) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Green;
 				goto ImageAnalysisEnd;
 			}
-			PixelX += 10;
+			PixelX += Image_Density_Horizontal;
 		}
-		PixelY -= 10;
+		PixelY -= Image_Density_Vertical;
 	}
 	ImageAnalysisEnd:
     cameraSensorData.object.direction = PixelX > camera.width / 2;
