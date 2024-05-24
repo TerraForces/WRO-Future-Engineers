@@ -1,4 +1,4 @@
-# WRO Future Enginiers - Team TerraForce - ESP32 Dev Kit C V4
+# WRO Future Engineers - Team TerraForce - ESP32 Dev Kit C V4
 
 ## Hardware Documentation
 * [datasheet](/doc/datasheets/ESP32-WROOM-32_datasheet.pdf)
