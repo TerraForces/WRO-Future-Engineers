@@ -62,10 +62,11 @@ struct CAMERA_SENSOR_DATA {
     int32_t rotation; // rotation in 1/10 degrees
 
     struct OBJECT_DATA {
-        uint8_t available   : 1;
-        uint8_t color       : 1;
-        uint8_t direction   : 1;
-        uint8_t angle       : 5;
+        uint16_t available  : 1;
+        uint16_t color      : 1;
+        uint16_t direction  : 1;
+        uint16_t x          : 7;
+        uint16_t y          : 6;
     } object;
 
 } cameraSensorData = {};
@@ -176,8 +177,8 @@ void loop() {
 // image processing parameters
 #define Image_Upper_Height          0.4
 #define Image_Lower_Height          0.8
-#define Image_Density_Horizontal    20
-#define Image_Density_Vertical      20
+#define Image_Density_Horizontal    10
+#define Image_Density_Vertical      10
 
 // image correction parameters
 #define Image_Average_Brightness                150
@@ -288,7 +289,8 @@ void ImageAnalysis() {
 	}
 	ImageAnalysisEnd:
     cameraSensorData.object.direction = PixelX > camera.width / 2;
-    cameraSensorData.object.angle = (uint8_t)(((((camera.width / 2) - PixelX) > 0 ? ((camera.width / 2) - PixelX) : -((camera.width / 2) - PixelX)) / (camera.width / 2.0)) * 0x1F);
+    cameraSensorData.object.x = (uint16_t)((PixelX / ((double)camera.width)) * 0x7F);
+    cameraSensorData.object.y = (uint16_t)((PixelY / ((double)camera.height)) * 0x3F);
     
     #ifdef SERIAL_DEBUG
         loggingSerial.print("Target pixel:\nx: ");

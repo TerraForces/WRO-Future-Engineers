@@ -1,6 +1,6 @@
-# WRO Future Enginiers - Team TerraForce
+# WRO Future Engineers - Team TerraForce
 
-## Bescheibung
+## Beschreibung
 Unser autonom fahrendes Auto besteht aus:
 * 1 Grundplatte aus Aluminium
 * 3 [Platinen](#platinen)

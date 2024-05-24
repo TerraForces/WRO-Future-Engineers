@@ -1,4 +1,4 @@
-# WRO Future Enginiers - Team TerraForce - ESP32 Cam
+# WRO Future Engineers - Team TerraForce - ESP32 Cam
 
 ## Hardware Dokumentation
 * [Datenblatt](/doc/datasheets/ESP32_Cam_datasheet.pdf)

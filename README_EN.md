@@ -1,4 +1,4 @@
-# WRO Future Enginiers - Team TerraForce
+# WRO Future Engineers - Team TerraForce
 
 ## Description
 Our autonomously driving car consists of:
