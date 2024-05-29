@@ -5,6 +5,32 @@
 
 #define WRO_CAMERA_VERSION "1.3.0"
 
+#define MAX2(a, b) ((a) > (b) ? (a) : (b))
+#define MAX3(a, b, c) (MAX2(MAX2(a, b), c))
+#define MIN2(a, b) ((a) < (b) ? (a) : (b))
+#define MIN3(a, b, c) (MIN2(MIN2(a, b), c))
+
+// image processing parameters
+#define Image_Upper_Height          0.4
+#define Image_Lower_Height          0.8
+#define Image_Density_Horizontal    20
+#define Image_Density_Vertical      20
+
+// image correction parameters
+#define Image_Average_Brightness                175
+#define Image_Brightness_Correction_Strength    1.0
+#define Image_Color_Correction_Strength         0.5
+
+// image analysis parameters
+#define Image_Black_Value_R         40
+#define Image_Black_Value_G         40
+#define Image_Black_Value_B         40
+#define Image_Min_Red_Value         60
+#define Image_Min_Green_Value       60
+#define Image_Max_Green_Value       200
+#define Image_Red_Ratio             1.4
+#define Image_Green_Ratio           1.6
+
 // serial debug
 // #define SERIAL_DEBUG
 
@@ -14,7 +40,6 @@
 
 // saves image (after correction) on sd card
 // #define SAVE_IMAGE_SD_CARD
-
 
 #pragma region includes
 
@@ -60,15 +85,12 @@ enum ObjectDirections {
 
 struct CAMERA_SENSOR_DATA {
     int32_t rotation; // rotation in 1/10 degrees
-
     struct OBJECT_DATA {
-        uint16_t available  : 1;
-        uint16_t color      : 1;
-        uint16_t direction  : 1;
-        uint16_t x          : 7;
-        uint16_t y          : 6;
+        uint8_t available   : 1;
+        uint8_t color       : 1;
+        uint8_t direction   : 1;
+        uint8_t angle       : 5;
     } object;
-
 } cameraSensorData = {};
 
 #ifndef SAVE_IMAGE_SD_CARD
@@ -138,7 +160,6 @@ void setup() {
 #pragma region loop
 
 void loop() {
-
     camera.capture();
 
     #ifndef SAVE_IMAGE_SD_CARD
@@ -162,38 +183,13 @@ void loop() {
             loggingSerial.println("done.\n");
         #endif
     #endif
+    delay(50);
 }
 
 #pragma endregion loop
 
 
 #pragma region functions
-
-#define MAX2(a, b) ((a) > (b) ? (a) : (b))
-#define MAX3(a, b, c) (MAX2(MAX2(a, b), c))
-#define MIN2(a, b) ((a) < (b) ? (a) : (b))
-#define MIN3(a, b, c) (MIN2(MIN2(a, b), c))
-
-// image processing parameters
-#define Image_Upper_Height          0.4
-#define Image_Lower_Height          0.8
-#define Image_Density_Horizontal    10
-#define Image_Density_Vertical      10
-
-// image correction parameters
-#define Image_Average_Brightness                150
-#define Image_Brightness_Correction_Strength    1.0
-#define Image_Color_Correction_Strength         0.5
-
-// image analysis parameters
-#define Image_Black_Value_R         40
-#define Image_Black_Value_G         40
-#define Image_Black_Value_B         40
-#define Image_Min_Red_Value         60
-#define Image_Min_Green_Value       40
-#define Image_Max_Green_Value       200
-#define Image_Red_Ratio             1.4
-#define Image_Green_Ratio           1.4
 
 void ImageAnalysis() {
 	uint32_t averageR = 0, averageG = 0, averageB = 0;
@@ -250,6 +246,10 @@ void ImageAnalysis() {
         file.close();
     #endif
 
+    #ifndef SAVE_IMAGE_SD_CARD
+        i2cSendData();
+    #endif
+
     uint16_t PixelX = 0;
     uint16_t PixelY = camera.height * Image_Lower_Height;
 
@@ -289,8 +289,7 @@ void ImageAnalysis() {
 	}
 	ImageAnalysisEnd:
     cameraSensorData.object.direction = PixelX > camera.width / 2;
-    cameraSensorData.object.x = (uint16_t)((PixelX / ((double)camera.width)) * 0x7F);
-    cameraSensorData.object.y = (uint16_t)((PixelY / ((double)camera.height)) * 0x3F);
+    cameraSensorData.object.angle = (uint8_t)(((((camera.width / 2) - PixelX) > 0 ? ((camera.width / 2) - PixelX) : -((camera.width / 2) - PixelX)) / (camera.width / 2.0)) * 0x1F);
     
     #ifdef SERIAL_DEBUG
         loggingSerial.print("Target pixel:\nx: ");
