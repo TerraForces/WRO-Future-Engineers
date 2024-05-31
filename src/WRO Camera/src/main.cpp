@@ -3,7 +3,12 @@
  * by TerraForce
 */
 
-#define WRO_CAMERA_VERSION "1.3.0"
+#define WRO_CAMERA_VERSION "1.5.0"
+
+#define SERIAL_DEBUG
+
+// saves image (after correction) on sd card
+// #define SAVE_IMAGE_SD_CARD
 
 #define MAX2(a, b) ((a) > (b) ? (a) : (b))
 #define MAX3(a, b, c) (MAX2(MAX2(a, b), c))
@@ -14,37 +19,29 @@
 #define Image_Upper_Height          0.4
 #define Image_Lower_Height          0.8
 #define Image_Density_Horizontal    20
-#define Image_Density_Vertical      20
+#define Image_Density_Vertical      10
 
 // image correction parameters
-#define Image_Average_Brightness                175
+#define Image_Average_Brightness                180
 #define Image_Brightness_Correction_Strength    1.0
-#define Image_Color_Correction_Strength         0.5
+#define Image_Color_Correction_Strength         0.8
 
 // image analysis parameters
-#define Image_Black_Value_R         40
-#define Image_Black_Value_G         40
-#define Image_Black_Value_B         40
-#define Image_Min_Red_Value         60
-#define Image_Min_Green_Value       60
+#define Image_Black_Value_R         50
+#define Image_Black_Value_G         50
+#define Image_Black_Value_B         50
+#define Image_Min_Red_Value         100
+#define Image_Min_Green_Value       50
 #define Image_Max_Green_Value       200
-#define Image_Red_Ratio             1.4
-#define Image_Green_Ratio           1.6
-
-// serial debug
-// #define SERIAL_DEBUG
-
-// serial debug features
-// #define DEBUG_I2C_SCAN
-// #define DEBUG_ROTATION
-
-// saves image (after correction) on sd card
-// #define SAVE_IMAGE_SD_CARD
+#define Image_Red_Ratio             2
+#define Image_Green_Ratio           1.5
 
 #pragma region includes
 
 #include <Arduino.h>
 #include "camera.h"
+
+uint8_t data = 1;
 
 #ifdef SERIAL_DEBUG
     #include <HardwareSerial.h>
@@ -121,6 +118,7 @@ void ImageAnalysis();
 
 
 #pragma region setup
+uint8_t i2c_data = 0;
 
 void setup() {
 
@@ -150,8 +148,14 @@ void setup() {
 
     #ifndef SAVE_IMAGE_SD_CARD
         // start MPU6050
-        mpu6050.init(&i2c_master, 0x68, (uint8_t)(1 << Rotation_Z), 1 - xPortGetCoreID());
+        mpu6050.init(&i2c_master, 0x68, (uint8_t)(1 << Rotation_Z), 1 - xPortGetCoreID(), 250, 500);
     #endif
+
+    while ((i2c_data == 0) || (i2c_data == 255)){
+        i2c_master.requestFrom(0x51, 1);
+        i2c_data = (uint8_t)i2c_master.read();
+        delay(50);
+    }
 }
 
 #pragma endregion setup
@@ -160,13 +164,11 @@ void setup() {
 #pragma region loop
 
 void loop() {
-    camera.capture();
-
-    #ifndef SAVE_IMAGE_SD_CARD
-        i2cSendData();
-    #endif
-
-    ImageAnalysis();
+    
+    if (i2c_data == 1){
+        camera.capture();
+        ImageAnalysis();
+    }
 
     #ifndef SAVE_IMAGE_SD_CARD
         i2cSendData();
@@ -183,7 +185,7 @@ void loop() {
             loggingSerial.println("done.\n");
         #endif
     #endif
-    delay(50);
+    delay(40);
 }
 
 #pragma endregion loop
@@ -205,14 +207,15 @@ void ImageAnalysis() {
 	averageG = (uint32_t)(averageG / (double)pixelCount);
 	averageB = (uint32_t)(averageB / (double)pixelCount);
     uint16_t averageMin = MIN3(averageR, averageG, averageB);
-	int16_t correctionR = (int16_t)(((averageR - averageMin) * Image_Color_Correction_Strength) + ((averageMin - Image_Average_Brightness) * Image_Brightness_Correction_Strength));
-	int16_t correctionG = (int16_t)(((averageG - averageMin) * Image_Color_Correction_Strength) + ((averageMin - Image_Average_Brightness) * Image_Brightness_Correction_Strength));
-    int16_t correctionB = (int16_t)(((averageB - averageMin) * Image_Color_Correction_Strength) + ((averageMin - Image_Average_Brightness) * Image_Brightness_Correction_Strength));
-	for (uint16_t x = 0; x < camera.width; x += Image_Density_Horizontal) {
+	uint8_t correctionR = (int16_t)((averageR - averageMin) * Image_Color_Correction_Strength);
+	uint8_t correctionG = (int16_t)((averageG - averageMin) * Image_Color_Correction_Strength);
+    uint8_t correctionB = (int16_t)((averageB - averageMin) * Image_Color_Correction_Strength);
+	float brightnessCorrection = (Image_Average_Brightness / ((float)averageMin)) * Image_Brightness_Correction_Strength;
+    for (uint16_t x = 0; x < camera.width; x += Image_Density_Horizontal) {
 		for (uint16_t y = camera.height * Image_Upper_Height; y < camera.height * Image_Lower_Height; y += Image_Density_Vertical) {
-			camera[x][y].r() = MIN2(MAX2(camera[x][y].r() - correctionR, 0), 255);
-            camera[x][y].g() = MIN2(MAX2(camera[x][y].g() - correctionG, 0), 255);
-            camera[x][y].b() = MIN2(MAX2(camera[x][y].b() - correctionB, 0), 255);
+			camera[x][y].r() = MIN2(MAX2((camera[x][y].r() - correctionR) * brightnessCorrection, 0), 255);
+            camera[x][y].g() = MIN2(MAX2((camera[x][y].g() - correctionG) * brightnessCorrection, 0), 255);
+            camera[x][y].b() = MIN2(MAX2((camera[x][y].b() - correctionB) * brightnessCorrection, 0), 255);
 		}
 	}
 
@@ -246,10 +249,6 @@ void ImageAnalysis() {
         file.close();
     #endif
 
-    #ifndef SAVE_IMAGE_SD_CARD
-        i2cSendData();
-    #endif
-
     uint16_t PixelX = 0;
     uint16_t PixelY = camera.height * Image_Lower_Height;
 
@@ -264,7 +263,7 @@ void ImageAnalysis() {
 				cameraSensorData.object.color = Red;
 				goto ImageAnalysisEnd;
 			}
-			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() + 30) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 120) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
+			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() + 40) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 120) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Green;
 				goto ImageAnalysisEnd;
@@ -273,12 +272,12 @@ void ImageAnalysis() {
 		}
 		PixelX = camera.width / 2;
 		while ((camera[PixelX][PixelY].r() > Image_Black_Value_R) && (camera[PixelX][PixelY].g() > Image_Black_Value_G) && (camera[PixelX][PixelY].b() > Image_Black_Value_B) && (PixelX < camera.width -200)) {
-			if ((camera[PixelX][PixelY].r() > camera[PixelX][PixelY].g() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > camera[PixelX][PixelY].b() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > Image_Min_Red_Value)) {
+			if ((camera[PixelX][PixelY].r() > camera[PixelX][PixelY].g() * Image_Red_Ratio) && (camera[PixelX][PixelY].r() > camera[PixelX][PixelY].b() * (Image_Red_Ratio - 0.4)) && (camera[PixelX][PixelY].r() > Image_Min_Red_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Red;
 				goto ImageAnalysisEnd;
 			}
-			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() + 30) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 120) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
+			if ((camera[PixelX][PixelY].g() > camera[PixelX][PixelY].r() + 40) && (camera[PixelX][PixelY].g() < camera[PixelX][PixelY].r() + 200) && (camera[PixelX][PixelY].g() > camera[PixelX][PixelY].b() * Image_Green_Ratio) && (camera[PixelX][PixelY].g() > Image_Min_Green_Value)) {
 				cameraSensorData.object.available = true;
 				cameraSensorData.object.color = Green;
 				goto ImageAnalysisEnd;
@@ -329,10 +328,6 @@ void ImageAnalysis() {
         i2c_master.beginTransmission(0x51);
         i2c_master.write((uint8_t*)&cameraSensorData, sizeof(CAMERA_SENSOR_DATA));
         i2c_master.endTransmission();
-        
-        #ifdef DEBUG_ROTATION
-            loggingSerial.println(cameraSensorData.rotation / 10.0, 1);
-        #endif
     }
 #endif
 

@@ -3,7 +3,7 @@
  * by TerraForce
 */
 
-#define WRO_MAIN_VERSION "1.4.0"
+#define WRO_MAIN_VERSION "1.5.0"
 
 #define VOLTAGE_BATTERY_CHARGED     8.4
 #define VOLTAGE_BATTERY_EMPTY       7.2
@@ -75,6 +75,7 @@ struct CAMERA_SENSOR_DATA {
 
 TaskHandle_t ultrasonicThread;
 uint16_t ultrasonicDistance[6] = {}; // distance to object in front of ultrasonic sensor in mm
+uint8_t ultrasonicProcess = 0;
 
 int8_t servoState[4] = {};
 uint8_t lightState = 0;
@@ -126,13 +127,16 @@ uint8_t maxSpeed = 11;
 void driveControlStarterCourse();
 void driveControlObstacleCourse();
 void fireUltrasonic(uint8_t num);
-void i2cOnReceiveFunction(int bytes);
+void ultrasonicThreadFunction(void* parameter);
 void setServo(uint8_t index, int8_t speed);
 void setLight(uint8_t index, bool state);
-void testAlgorithm();
-void ultrasonicThreadFunction(void* parameter);
-void updateOLED(String secondLine);
+void i2cOnReceiveFunction(int bytes);
+void i2cOnRequestFunction();
+void updateOLED(bool showBatteryVoltage, String secondLine);
 void updateVoltageAndRPM();
+void testAlgorithm();
+
+uint8_t data_to_send = 0;
 
 #pragma endregion functions
 
@@ -141,12 +145,20 @@ void updateVoltageAndRPM();
 
 void setup() {
     
-    // start serial for logging
     loggingSerial.setTxBufferSize(256);
     loggingSerial.begin(115200, SERIAL_8N1, -1, -1, false, 20000, 112);
     loggingSerial.println(String("\nWRO Main\nVersion: ") + WRO_MAIN_VERSION + "\n");
 
-    // start I2C 0 as master in fast mode
+    if(i2c_slave.begin(0x51, Pin_I2C_SLAVE_SDA, Pin_I2C_SLAVE_SCL, 400000)) {
+        loggingSerial.println("SUCCESS - I2C slave started");
+    }
+    else {
+        loggingSerial.println("FAILED - I2C slave start failed");
+    }
+    i2c_slave.onReceive(i2cOnReceiveFunction);
+    i2c_slave.onRequest(i2cOnRequestFunction);
+
+    // start I2C as master in fast mode
     if(i2c_master.begin(Pin_I2C_MASTER_SDA, Pin_I2C_MASTER_SCL, 400000)) {
         loggingSerial.println("SUCCESS - I2C master started");
     }
@@ -182,17 +194,24 @@ void setup() {
     loggingSerial.println("SUCCESS - pin modes set");
 
     // wait for WRO Camera to get ready
-    delay(3000);
+    delay(1000);
 
-    // start I2C 1 as slave in fast mode
-    if(i2c_slave.begin(0x51, Pin_I2C_SLAVE_SDA, Pin_I2C_SLAVE_SCL, 400000)) {
-        loggingSerial.println("SUCCESS - I2C slave started");
-    }
-    else {
-        loggingSerial.println("FAILED - I2C slave start failed");
-    }
-    i2c_slave.onReceive(i2cOnReceiveFunction);
+    oled.clearDisplay();
+    oled.setCursor(2, 2);
+    oled.setTextSize(1);
+    oled.setTextColor(1);
+    oled.print(digitalRead(Pin_Test_Mode_Switch) ? (digitalRead(Pin_Obstacle_Switch) ? "Starter course" : "Obstacle course") : "Test mode");
+    oled.display();
+
+    digitalWrite(Pin_Start_Button_LED, HIGH);
+    loggingSerial.print(digitalRead(Pin_Test_Mode_Switch) ? (digitalRead(Pin_Obstacle_Switch) ? "Starter course" : "Obstacle course") : "Test mode");
+    loggingSerial.println(" - Waiting for start signal ...");
     
+
+    // wait for start signal
+    while(digitalRead(Pin_Start_Button) == HIGH) {
+        delay(5);
+    }
     // start ultrasonic sensor thread
     if(xTaskCreatePinnedToCore(ultrasonicThreadFunction, "Ultrasonic Thread", 10000, NULL, 0, &ultrasonicThread, 1 - xPortGetCoreID()) == pdPASS) {
         loggingSerial.println("SUCCESS - Ultrasonic sensor thread created\n");
@@ -200,33 +219,30 @@ void setup() {
     else {
         loggingSerial.println("FAILED - Ultrasonic sensor thread creation failed\n");
     }
+
     
-    // enable upper LED row, disable other lights
+    if(digitalRead(Pin_Obstacle_Switch) == HIGH){
+        data_to_send = 2;
+    }
+    else{
+        data_to_send = 1;
+    }
+    
     if(digitalRead(Pin_Test_Mode_Switch) == HIGH) {
         setLight(0, 0);
         setLight(1, 0);
         setLight(2, 1);
     }
 
-    digitalWrite(Pin_Start_Button_LED, HIGH);
-    loggingSerial.print(digitalRead(Pin_Test_Mode_Switch) ? (digitalRead(Pin_Obstacle_Switch) ? "Starter course" : "Obstacle course") : "Test mode");
-    loggingSerial.println(" - Waiting for start signal ...");
-
-    // wait for start signal
-    while(digitalRead(Pin_Start_Button) == HIGH) {
-        if(millis() > lastDisplayUpdate + 1000) {
-            updateOLED(digitalRead(Pin_Test_Mode_Switch) ? (digitalRead(Pin_Obstacle_Switch) ? "Starter course" : "Obstacle course") : "Test mode");
-            lastDisplayUpdate = millis();
-        }
-    }
-
-    // start driving or start test mode
     loggingSerial.println("Start signal received");
     digitalWrite(Pin_Start_Button_LED, LOW);
+
     if(digitalRead(Pin_Test_Mode_Switch) == HIGH) {
-        setServo(0, 7);
+        setServo(0, 6);
         antiRotation = rotation;
+        delay(500);
         startPosDistance = ultrasonicDistance[US_CenterFront];
+        delay(750);
     }
     else {
         loggingSerial.println("Test mode initialised\n");
@@ -241,15 +257,53 @@ void setup() {
 
 void loop() {
     if(digitalRead(Pin_Test_Mode_Switch) == HIGH) {
-        if(digitalRead(Pin_Obstacle_Switch)) {
-            driveControlStarterCourse();
+        if(digitalRead(Pin_Obstacle_Switch) == LOW){
+            driveControlObstacleCourse();
         }
         else{
-            driveControlObstacleCourse();
+            driveControlStarterCourse();
         }
     }
     if(millis() > lastDisplayUpdate + 1000) {
-        updateOLED(cameraSensorData.object.available ? ((cameraSensorData.object.color ? "Red" : "Green") + String(cameraSensorData.object.direction ? " - Right " : " - Left ") + String(cameraSensorData.object.angle)) : "No object");
+
+        updateVoltageAndRPM();
+
+        float batteryVoltage = (powerSensorData.analogValues[0] * 0.012060546875);
+        float chargeLevel = (batteryVoltage - VOLTAGE_BATTERY_EMPTY) / (VOLTAGE_BATTERY_CHARGED - VOLTAGE_BATTERY_EMPTY);
+        chargeLevel = (chargeLevel > 0 ? (chargeLevel < 1 ? chargeLevel : 1) : 0);
+        maxSpeed = 11 - (chargeLevel);
+        oled.clearDisplay();
+        oled.setCursor(2, 2);
+        oled.setTextSize(1);
+        oled.setTextColor(1);
+        oled.print(batteryVoltage, 2);
+        oled.print(" V");
+        oled.drawRect(80, 2, 40, 8, 1);
+        oled.fillRect(120, 4, 3, 4, 1);
+        if(chargeLevel < 1) {
+            oled.fillRect(120, 5, 2, 2, 0);
+        }
+        oled.fillRect(80, 2, (uint8_t)(40 * chargeLevel), 8, 1);
+        oled.setCursor(2, 16);
+        if(cameraSensorData.object.available) {
+            if(cameraSensorData.object.color) {
+                oled.print("Red");
+            }
+            else {
+                oled.print("Green");
+            }
+            if(cameraSensorData.object.direction) {
+                oled.print(" - Right ");
+            }
+            else {
+                oled.print(" - Left ");
+            }
+            oled.print(cameraSensorData.object.angle);
+        }
+        else {
+            oled.print("No object");
+        }
+        oled.display();
         lastDisplayUpdate = millis();
     }
 }
@@ -260,8 +314,8 @@ void loop() {
 #pragma region functions
 
 void driveControlStarterCourse() {
-    if((driveState.state != Curve) && (driveState.state != CurveEnding) && (outsideBorder != Unknown) && (ultrasonicDistance[US_LeftBack] + ultrasonicDistance[US_RightBack] < 1000) && (ultrasonicDistance[US_LeftFront] + ultrasonicDistance[US_RightFront] < 1000)) {
-        if(outsideBorder == Right) {
+    if(driveState.state != Curve && driveState.state != CurveEnding && outsideBorder != Unknown && ultrasonicDistance[US_LeftBack] + ultrasonicDistance[US_RightBack] < 1000 && ultrasonicDistance[US_LeftFront] + ultrasonicDistance[US_RightFront] < 1000){
+        if(outsideBorder == Right){
             if(ultrasonicDistance[US_RightBack] == ultrasonicDistance[US_RightFront]) {
                 antiRotation = cameraSensorData.rotation;
             }
@@ -272,6 +326,8 @@ void driveControlStarterCourse() {
             }
         }
     }
+
+    // detect inner and outer border
     if(outsideBorder == Unknown) {
         if(ultrasonicDistance[US_LeftFront] > 1100) {
             outsideBorder = Right;
@@ -307,7 +363,6 @@ void driveControlStarterCourse() {
                     setServo(1, 15);
                     curveCount++;
                     lastCurve = millis();
-                    
                 }
                 if(curveCount == 12) {
                     outsideBorder = End;
@@ -320,22 +375,27 @@ void driveControlStarterCourse() {
                 }
             }
         }
-        if((((driveState.state == Curve) && (((driveState.direction == Left) && (rotation <= targetRotation)) || ((driveState.direction == Right) && (rotation >= targetRotation)))) || ((driveState.state == Curve) && (driveState.direction == Right) && (rotation > 800) && ((outsideBorder2 == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront] < 10)))) || ((driveState.state == Curve) && (driveState.direction == Right) && (rotation > 800) && ((outsideBorder2 == Left) && (ultrasonicDistance[US_LeftBack] - ultrasonicDistance[US_LeftFront] < 10)))) {
+
+        // drive straight again after curve
+        if((((driveState.state == Curve) && driveState.direction == Left && rotation < -800 && (outsideBorder2 == Right && ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront] <  10))) || ((driveState.state == Curve) && driveState.direction == Right && rotation > 800 && (outsideBorder2 == Left && ultrasonicDistance[US_LeftBack] - ultrasonicDistance[US_LeftFront] <  10))) {
             setServo(1, 0);
             delay(50);
             setServo(0, 8);
             driveState.state = CurveEnding;
             lastCurve = millis();
         }
+
         // reset curve status
         if((driveState.state == CurveEnding) && (((driveState.direction == Left) && (ultrasonicDistance[US_LeftBack] < 1200)) || ((driveState.direction == Right) && (ultrasonicDistance[US_RightBack] < 1200)))) {
             driveState.direction = Unknown;
             driveState.state = Unknown;
         }
     }
-    if(((driveState.state == Unknown) || (driveState.state == UltrasonicCorrection) || (driveState.state == BorderCorrection) || (driveState.state == CurveEnding)) && (driveState.state != Curve)) {
+
+    if(((driveState.state == Unknown) || (driveState.state == UltrasonicCorrection)||(driveState.state == BorderCorrection)||(driveState.state == CurveEnding))&&(driveState.state != Curve)) {
+
         // direction correction (ultrasonic)
-        if(driveState.state != BorderCorrection) {
+        if(driveState.state != BorderCorrection){
             if(((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > 40) && (outsideBorder2 == Left)) || ((ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] < -40) && (outsideBorder2 == Right))) {
                 driveState.direction = Left;
                 driveState.state = UltrasonicCorrection;
@@ -367,6 +427,7 @@ void driveControlStarterCourse() {
                 setServo(1, 0);
             }
         }
+
         // near border correction (ultrasonic)
         if((driveState.state == BorderCorrection) && (ultrasonicDistance[US_LeftFront] > 150) && (ultrasonicDistance[US_RightFront] > 150)) {
             driveState.direction = Unknown;
@@ -403,18 +464,21 @@ void driveControlStarterCourse() {
             setServo(0, maxSpeed - 3);
         }
         else if((driveState.state != Curve) && (outsideBorder != End)) {
-            setServo(0, maxSpeed - 1);
+            setServo(0, maxSpeed + 1);
         }
     }
 }
 
 void driveControlObstacleCourse() {
+
     if((ultrasonicDistance[US_CenterFront] < 1000) && (driveState.state != Curve)) {
-        setServo(0, 6);
+        setServo(0, maxSpeed - 4);
     }
     else if(driveState.state != Curve) {
-        setServo(0,8);
+        setServo(0, maxSpeed - 2);
     }
+
+    // detect inner and outer border
     if(outsideBorder == Unknown) {
         if(ultrasonicDistance[US_LeftFront] > 1100) {
             outsideBorder = Right;
@@ -423,53 +487,29 @@ void driveControlObstacleCourse() {
             outsideBorder = Left;
         }
     }
+
     if(outsideBorder != Unknown) {
         if((driveState.state != Curve) && (driveState.state != CurveEnding) && (driveState.state != BorderCorrection)) {
             if(curveCount < 12) {
+                // detect curves
                 if((millis() > lastCurve + 6000) && (outsideBorder == Right) && (ultrasonicDistance[US_LeftFront] > 1300)) {
-                    if((cameraSensorData.object.available == 1) && (cameraSensorData.object.color == 1)) {
-                        if((cameraSensorData.object.available == 1) && (cameraSensorData.object.color == 1)) {
-                            setServo(0, maxSpeed - 1);
-                            delay(1500);
-                        }
-                    }
-                    else {
-                        delay(500);
-                        if((cameraSensorData.object.available == 1) && (cameraSensorData.object.color == 1)) {
-                            setServo(0, maxSpeed - 1);
-                            delay(1000);
-                        }
-                    }
                     driveState.direction = Left;
                     driveState.state = Curve;
                     antiRotation = cameraSensorData.rotation;
                     targetRotation = -1000;
                     rotation = 0;
                     setServo(1, -15);
-                    setServo(0, maxSpeed - 1);
+                    setServo(0, maxSpeed - 2);
                     curveCount++;
                 }
                 if((millis() > lastCurve + 8000) && (outsideBorder == Left) && (ultrasonicDistance[US_RightFront] > 1300)) {
-                    if((cameraSensorData.object.available == 1) && (cameraSensorData.object.color == 0)) {
-                        if((cameraSensorData.object.available == 1) && (cameraSensorData.object.color == 0)) {
-                            setServo(0, maxSpeed - 1);
-                            delay(1500);
-                        }
-                    }
-                    else {
-                        delay(500);
-                        if((cameraSensorData.object.available == 1) && (cameraSensorData.object.color == 0)) {
-                            setServo(0, maxSpeed - 1);
-                            delay(1000);
-                        }
-                    }
                     driveState.direction = Right;
                     driveState.state = Curve;
                     antiRotation = cameraSensorData.rotation;
                     targetRotation = 1000;
                     rotation = 0;
                     setServo(1, 15);
-                    setServo(0, maxSpeed - 1);
+                    setServo(0, maxSpeed - 2);
                     curveCount++;
                 }
                 if(curveCount == 12) {
@@ -477,26 +517,34 @@ void driveControlObstacleCourse() {
                 }
             }
             else {
+                // find end position
                 if((ultrasonicDistance[US_CenterFront] != 0) && (ultrasonicDistance[US_CenterFront] < startPosDistance + 50)) {
                     setServo(0, 0);
                 }
             }
         }
-        if((((driveState.state == Curve) && (((driveState.direction == Left) && (rotation <= targetRotation)) || ((driveState.direction == Right) && (rotation >= targetRotation)))) || ((driveState.state == Curve) && (driveState.direction == Right) && (rotation > 800) && ((outsideBorder2 == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront] < 10)))) || ((driveState.state == Curve) && (driveState.direction == Right) && (rotation > 800) && ((outsideBorder2 == Left) && (ultrasonicDistance[US_LeftBack] - ultrasonicDistance[US_LeftFront] < 10)))) {
+
+        // drive straight again after curve
+        if((((driveState.state == Curve) && (((driveState.direction == Left) && (rotation <= targetRotation)) || ((driveState.direction == Right) && (rotation >= targetRotation)))) || ((driveState.state == Curve) && driveState.direction == Right && rotation > 800 && (outsideBorder2 == Right && ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront] <  10))) || ((driveState.state == Curve) && driveState.direction == Right && rotation > 800 && (outsideBorder2 == Left && ultrasonicDistance[US_LeftBack] - ultrasonicDistance[US_LeftFront] <  10)) || (driveState.state == Curve && cameraSensorData.object.available == 1 && cameraSensorData.object.color == 1 && outsideBorder2 == Right && rotation < -700)) {
             setServo(1, 0);
             delay(50);
             setServo(0, 8);
             driveState.state = CurveEnding;
             lastCurve = millis();
         }
+
+        // reset curve status
         if((driveState.state == CurveEnding) && (((driveState.direction == Left) && (ultrasonicDistance[US_LeftBack] < 1200)) || ((driveState.direction == Right) && (ultrasonicDistance[US_RightBack] < 1200)))) {
             driveState.direction = Unknown;
             driveState.state = Unknown;
         }
     }
+
     if(((driveState.state == Unknown) || (driveState.state == UltrasonicCorrection) || (driveState.state == BorderCorrection) || (driveState.state == CurveEnding)) && (driveState.state != Curve)) {
-        if(driveState.state != BorderCorrection) {
-            if(((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > 40) && (outsideBorder == Left)) || ((ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] < -40) && (outsideBorder == Right))) {
+        
+        // direction correction (ultrasonic)
+        if(driveState.state != BorderCorrection){
+            if((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > 40 && outsideBorder == Left) || (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] < -40 && outsideBorder == Right)) {
                 driveState.direction = Left;
                 driveState.state = UltrasonicCorrection;
                 setServo(1, -3);
@@ -506,7 +554,7 @@ void driveControlObstacleCourse() {
                 driveState.state = Unknown;
                 setServo(1, 0);
             }
-            else if(((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < -40) && (outsideBorder == Left)) || ((ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] > 40) && (outsideBorder == Right))) {
+            else if((ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < -40 && outsideBorder == Left) || (ultrasonicDistance[US_RightFront] - ultrasonicDistance[US_RightBack] > 40 && outsideBorder == Right)) {
                 driveState.direction = Right;
                 driveState.state = UltrasonicCorrection;
                 setServo(1, 3);
@@ -517,43 +565,58 @@ void driveControlObstacleCourse() {
                 setServo(1, 0);
             }
         }
+
+        // near border + object correction
         if(outsideBorder != Unknown) {
-            if((cameraSensorData.object.color == 0) && (cameraSensorData.object.available == 1) && (ultrasonicDistance[US_LeftFront] < 100)){
-                driveState.direction = Right;
-                driveState.state = BorderCorrection;
-                setServo(1, 8);
+            
+            if(cameraSensorData.object.available == 1) {
+
+                if(cameraSensorData.object.color == 0) { // green object
+                    if(ultrasonicDistance[US_LeftFront] < 180) {
+                        driveState.direction = Right;
+                        driveState.state = BorderCorrection;
+                        setServo(1, 8);
+                    }
+                    else if ((ultrasonicDistance[US_LeftFront] > 250) && (((outsideBorder == Left) && (ultrasonicDistance[US_LeftBack] - ultrasonicDistance[US_LeftFront] < 35)) || (((outsideBorder == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront] > -35))))) {
+                        driveState.direction = Left;
+                        driveState.state = BorderCorrection;
+                        setServo(1, -6);
+                    }
+                    else if ((ultrasonicDistance[US_LeftFront] > 250) && (((outsideBorder == Left) && (ultrasonicDistance[US_LeftBack] - ultrasonicDistance[US_LeftFront] > 40)) || (((outsideBorder == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront] < -40))))) {
+                        driveState.direction = Left;
+                        driveState.state = BorderCorrection;
+                        setServo(1, 6);
+                    }
+                    else {
+                        driveState.direction = Unknown;
+                        driveState.state = Unknown;
+                        setServo(1, 0);
+                    }  
+                }
+                else { // red object
+                    if(ultrasonicDistance[US_RightFront] < 180) {
+                        driveState.direction = Left;
+                        driveState.state = BorderCorrection;
+                        setServo(1, -10);
+                    }
+                    else if (((ultrasonicDistance[US_RightFront] > 200) && (((outsideBorder == Left) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] > -30)) || (((outsideBorder == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront]< 30)))))&& ultrasonicDistance[US_CenterFront] && ultrasonicDistance[US_CenterFront] > 200) {
+                        driveState.direction = Right;
+                        driveState.state = BorderCorrection;
+                        setServo(1, 6);
+                    }
+                    else if ((ultrasonicDistance[US_RightFront] > 200) && (((outsideBorder == Left) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < -40)) || (((outsideBorder == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront]> 40)))) && (ultrasonicDistance[US_CenterFront] > 200)) {
+                        driveState.direction = Right;
+                        driveState.state = BorderCorrection;
+                        setServo(1, -6);
+                    }
+                    else {
+                        driveState.direction = Unknown;
+                        driveState.state = Unknown;
+                        setServo(1, 0);
+                    }
+                }
             }
-            else if ((cameraSensorData.object.color == 0) && (cameraSensorData.object.available == 1) && (ultrasonicDistance[US_LeftFront] > 170) && (((outsideBorder == Left) && (ultrasonicDistance[US_LeftBack] - ultrasonicDistance[US_LeftFront] < 20)) || (((outsideBorder == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront]> -20))))) { // 0 = Grün
-                driveState.direction = Left;
-                driveState.state = BorderCorrection;
-                setServo(1, -8);
-            }
-            else if((cameraSensorData.object.color == 0) && (cameraSensorData.object.available == 1)) {
-                driveState.direction = Unknown;
-                driveState.state = Unknown;
-                setServo(1, 0);
-            }          
-            if((cameraSensorData.object.color == 1) && (cameraSensorData.object.available == 1) && (ultrasonicDistance[US_RightFront] < 100)) {
-                driveState.direction = Left;
-                driveState.state = BorderCorrection;
-                setServo(1, -10);
-            }
-            else if (((cameraSensorData.object.direction == 1) && (cameraSensorData.object.color == 1) && (cameraSensorData.object.available == 1) && (ultrasonicDistance[US_RightFront] > 150) && (((outsideBorder == Left) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < 25)) || (((outsideBorder == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront] < 25))))) && (ultrasonicDistance[US_CenterFront] > 200)) { // 1 = Rot
-                driveState.direction = Right;
-                driveState.state = BorderCorrection;
-                setServo(1, 12);
-            }
-            else if (((cameraSensorData.object.color == 1) && (cameraSensorData.object.available == 1) && (ultrasonicDistance[US_RightFront] > 150) && (((outsideBorder == Left) && (ultrasonicDistance[US_LeftFront] - ultrasonicDistance[US_LeftBack] < 22)) || (((outsideBorder == Right) && (ultrasonicDistance[US_RightBack] - ultrasonicDistance[US_RightFront] < 22))))) && (ultrasonicDistance[US_CenterFront] > 200)) { // 1 = Rot
-                driveState.direction = Right;
-                driveState.state = BorderCorrection;
-                setServo(1, 12);
-            }
-            else if((cameraSensorData.object.color == 1) && (cameraSensorData.object.available == 1)) {
-                driveState.direction = Unknown;
-                driveState.state = Unknown;
-                setServo(1, 0);
-            }
-            if(cameraSensorData.object.available == 0) {
+            else { // no object
                 if((driveState.state == BorderCorrection) && (ultrasonicDistance[US_LeftFront] > 300) && (ultrasonicDistance[US_RightFront] > 300)) {
                     driveState.direction = Unknown;
                     driveState.state = Unknown;
@@ -619,7 +682,24 @@ void i2cOnReceiveFunction(int bytes) {
     rotation = cameraSensorData.rotation - antiRotation;
 }
 
+void i2cOnRequestFunction() {
+    i2c_slave.write(data_to_send);
+}
+
+void updateVoltageAndRPM() {
+    i2c_master.requestFrom(0x50, sizeof(POWER_SENSOR_DATA));
+    while(i2c_master.available() < sizeof(POWER_SENSOR_DATA)) {
+        delay(1);
+    }
+    i2c_master.readBytes((uint8_t*)&powerSensorData, sizeof(POWER_SENSOR_DATA));
+}
+
 void testAlgorithm() {
+
+    while(true) {
+        loggingSerial.println("Rotation: " + String(rotation / 10.0, 1) + "°");
+        delay(100);
+    }
 
     // scan for I2C devices
     loggingSerial.println("Scanning for I2C devices:");
@@ -689,35 +769,6 @@ void testAlgorithm() {
     else {
         loggingSerial.println("No object found");
     }
-}
-
-void updateOLED(String secondLine) {
-    updateVoltageAndRPM();
-    float batteryVoltage = (powerSensorData.analogValues[0] * 0.012060546875);
-    float chargeLevel = (batteryVoltage - VOLTAGE_BATTERY_EMPTY) / (VOLTAGE_BATTERY_CHARGED - VOLTAGE_BATTERY_EMPTY);
-    oled.clearDisplay();
-    oled.setCursor(2, 2);
-    oled.setTextSize(1);
-    oled.setTextColor(1);
-    oled.print(batteryVoltage, 2);
-    oled.print(" V");
-    oled.drawRect(80, 2, 40, 8, 1);
-    oled.fillRect(120, 4, 3, 4, 1);
-    if(chargeLevel < 1) {
-        oled.fillRect(120, 5, 2, 2, 0);
-    }
-    oled.fillRect(80, 2, (uint8_t)(40 * (chargeLevel > 0 ? (chargeLevel < 1 ? chargeLevel : 1) : 0)), 8, 1);
-    oled.setCursor(2, 16);
-    oled.print(secondLine);
-    oled.display();
-}
-
-void updateVoltageAndRPM() {
-    i2c_master.requestFrom(0x50, sizeof(POWER_SENSOR_DATA));
-    while(i2c_master.available() < sizeof(POWER_SENSOR_DATA)) {
-        delay(1);
-    }
-    i2c_master.readBytes((uint8_t*)&powerSensorData, sizeof(POWER_SENSOR_DATA));
 }
 
 #pragma endregion
